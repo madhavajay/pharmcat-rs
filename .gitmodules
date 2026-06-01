@@ -1,0 +1,10 @@
+[submodule "PharmCAT"]
+	path = repos/PharmCAT
+	url = git@github.com:madhavajay/PharmCAT.git
+[submodule "repos/noodles"]
+	path = repos/noodles
+	url = git@github.com:madhavajay/noodles.git
+	branch = madhava/bioscript
+[submodule "repos/pgkb-common"]
+	path = repos/pgkb-common
+	url = git@github.com:madhavajay/pgkb-common.git

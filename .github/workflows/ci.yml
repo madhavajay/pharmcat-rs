@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  source-repos:
+    name: Source repos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Clone reference repositories
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          rm -rf repos
+          mkdir -p repos
+          git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
+          git clone --branch madhava/bioscript https://github.com/madhavajay/noodles.git repos/noodles
+          git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
+
+      - name: Show checked out commits
+        run: |
+          git -C repos/PharmCAT rev-parse --short HEAD
+          git -C repos/noodles rev-parse --short HEAD
+          git -C repos/pgkb-common rev-parse --short HEAD
+
+  java-reference-tests:
+    name: Java reference tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Clone Java reference repositories
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          rm -rf repos
+          mkdir -p repos
+          git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
+          git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle test
+        working-directory: repos/PharmCAT
+        run: ./gradlew test
+
+      - name: Upload Java test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharmcat-java-test-reports
+          path: |
+            repos/PharmCAT/build/reports/tests/
+            repos/PharmCAT/build/reports/jacoco/
+
+  rust-gate:
+    name: Rust gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Clone Rust dependency repositories
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          rm -rf repos
+          mkdir -p repos
+          git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
+          git clone --branch madhava/bioscript https://github.com/madhavajay/noodles.git repos/noodles
+          git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Use local noodles checkout for cargo
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [patch."https://github.com/madhavajay/noodles.git"]
+          noodles = { path = "repos/noodles/noodles" }
+
+          [patch.crates-io]
+          noodles = { path = "repos/noodles/noodles" }
+          EOF
+
+      - name: Cargo fmt
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo fmt --all --check
+
+      - name: Cargo clippy
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo test --workspace --all-features
+
+      - name: Rust crate not initialized yet
+        if: hashFiles('Cargo.toml') == ''
+        run: echo "No Cargo.toml yet; Rust gate will become active after the crate skeleton lands."
+
