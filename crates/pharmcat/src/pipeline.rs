@@ -6899,6 +6899,68 @@ mod tests {
     }
 
     #[test]
+    fn run_reporter_from_vcf_ugt1a1_hg00436_not_called_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Phased hap1 carries *80 (T) + *28 (CATAT) + *27 (A) together, which no single named allele
+        // describes with combinations disabled, so the matcher cannot call UGT1A1.
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[
+                ("rs887829", "T", "1|0"),
+                ("rs3064744", "CATAT", "1|0"),
+                ("rs35350960", "A", "1|0"),
+            ],
+            &[],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-hg00436.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 HG00436 not-called pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(
+            matches!(result.kind, GeneCallKind::NoCall),
+            "expected UGT1A1 matcher no-call, got {:?}",
+            result.kind
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("Unknown/Unknown"));
+    }
+
+    #[test]
     fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_missing_unphased_like_java_pipeline_test() {
         let definition =
             read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
