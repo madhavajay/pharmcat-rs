@@ -6409,6 +6409,88 @@ mod tests {
     }
 
     #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_missing_phased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Phased with rs3064744 missing: hap1 = *6 (rs4148323 A), hap2 = *80 (rs887829 T) but the
+        // missing repeat leaves *80, *80+*28, and *80+*37 indistinguishable.
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0|1"), ("rs4148323", "A", "1|0")],
+            &["rs3064744"],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s80-s28-missing-phased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*80 missing phased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*6/*80", "*6/*80+*28", "*6/*80+*37"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+    }
+
+    #[test]
     fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_unphased_like_java_pipeline_test() {
         let definition =
             read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
