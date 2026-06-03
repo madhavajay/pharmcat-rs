@@ -53,6 +53,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
 
       - name: Gradle test
         working-directory: repos/PharmCAT
@@ -88,31 +89,35 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Use local noodles checkout for cargo
-        if: hashFiles('Cargo.toml') != ''
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<'EOF'
           [patch."https://github.com/madhavajay/noodles.git"]
-          noodles = { path = "repos/noodles/noodles" }
+          noodles-bgzf = { path = "repos/noodles/noodles-bgzf" }
+          noodles-vcf = { path = "repos/noodles/noodles-vcf" }
 
           [patch.crates-io]
-          noodles = { path = "repos/noodles/noodles" }
+          noodles-bgzf = { path = "repos/noodles/noodles-bgzf" }
+          noodles-vcf = { path = "repos/noodles/noodles-vcf" }
           EOF
 
       - name: Cargo fmt
-        if: hashFiles('Cargo.toml') != ''
         run: cargo fmt --all --check
 
       - name: Cargo clippy
-        if: hashFiles('Cargo.toml') != ''
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Cargo test
-        if: hashFiles('Cargo.toml') != ''
         run: cargo test --workspace --all-features
-
-      - name: Rust crate not initialized yet
-        if: hashFiles('Cargo.toml') == ''
-        run: echo "No Cargo.toml yet; Rust gate will become active after the crate skeleton lands."
-

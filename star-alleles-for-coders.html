@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Star Alleles for Coders — How PharmCAT Calls Diplotypes</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --ink:#e6e9ef; --mut:#9aa4b2;
+    --acc:#6ea8fe; --good:#5fd28a; --warn:#f0c674; --bad:#f08a8a; --line:#2a2f3a;
+    --code:#11141a;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:40px 22px 120px; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 6px; }
+  h2 { font-size:1.4rem; margin:54px 0 14px; padding-top:18px; border-top:1px solid var(--line); }
+  h3 { font-size:1.1rem; margin:30px 0 10px; color:var(--acc); }
+  p, li { color:var(--ink); }
+  .lede { color:var(--mut); font-size:1.05rem; margin:0 0 8px; }
+  code { font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.9em;
+    background:var(--code); padding:1.5px 6px; border-radius:5px; color:#d6deeb; }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; overflow-x:auto; font-size:.86rem; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:18px 20px; margin:18px 0; }
+  .note { border-left:4px solid var(--acc); }
+  .good { border-left:4px solid var(--good); }
+  .warn { border-left:4px solid var(--warn); }
+  .bad  { border-left:4px solid var(--bad);  }
+  .tag { display:inline-block; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase;
+    padding:2px 8px; border-radius:20px; background:var(--panel2); color:var(--mut);
+    border:1px solid var(--line); }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:.9rem; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--panel2); color:var(--ink); }
+  td code { white-space:nowrap; }
+  .mut { color:var(--mut); }
+  .ok { color:var(--good); } .no { color:var(--bad); } .wob { color:var(--warn); }
+  .toc { columns:2; column-gap:30px; font-size:.93rem; }
+  .toc a { color:var(--acc); text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+  .step { display:flex; gap:14px; margin:14px 0; }
+  .step .n { flex:0 0 30px; height:30px; border-radius:50%; background:var(--acc); color:#0b1020;
+    font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .step .b { flex:1; }
+  .filecite { font-size:.8rem; color:var(--mut); margin-top:6px; }
+  .filecite code { font-size:.95em; }
+  hr { border:none; border-top:1px solid var(--line); margin:40px 0; }
+  .kbd { font-size:.8rem; background:var(--panel2); border:1px solid var(--line);
+    border-bottom-width:2px; border-radius:5px; padding:1px 6px; }
+  .arrow { color:var(--acc); }
+  ul.tight li { margin:3px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Star Alleles for Coders</h1>
+<p class="lede">How PharmCAT turns a VCF of variant calls into a diplotype like <code>CYP2C19 *2/*17</code> — the data, the matching algorithm, when phasing matters, and whether you can drop in raw PharmVar data.</p>
+<p class="mut">Grounded in the PharmCAT Java source under <code>haplotype/</code> and the real <code>*_translation.json</code> definition files. File/line citations throughout.</p>
+
+<div class="panel note">
+<strong>The one-sentence version:</strong> there is no rule engine. Each star allele is stored as a <em>vector of expected bases at a fixed list of positions</em>; PharmCAT builds every possible haplotype string your sample could have, regex-matches those strings against every allele vector, pairs the matches into diplotypes, and ranks them by a score. "Filtering down to candidates by elimination" is exactly right — the rules <em>are</em> the data.
+</div>
+
+<h2 id="toc">Contents</h2>
+<div class="toc">
+<a href="#model">1. The mental model</a><br>
+<a href="#data">2. Where the rules live (the data)</a><br>
+<a href="#algo">3. The algorithm, step by step</a><br>
+<a href="#regex">4. Alleles are regexes</a><br>
+<a href="#worked">5. Worked example: CYP2C19</a><br>
+<a href="#phasing">6. Phasing: when it's used &amp; when skipped</a><br>
+<a href="#consequences">7. Consequences of skipping phasing</a><br>
+<a href="#score">8. Scoring, combinations &amp; special genes</a><br>
+<a href="#pharmvar">9. Can you just download PharmVar CYP1A2 and run it?</a><br>
+<a href="#checklist">10. Checklist to add a new gene</a><br>
+</div>
+
+<h2 id="model">1. The mental model</h2>
+<p>A <strong>star allele</strong> (haplotype) is a named pattern of DNA at specific positions in one gene — e.g. <code>CYP2C19*2</code>. You have two copies of each gene (maternal + paternal), so your genotype is a <strong>diplotype</strong>: two star alleles, e.g. <code>*2/*17</code>. That diplotype maps to a metabolizer <strong>phenotype</strong> (poor / intermediate / normal / rapid / ultrarapid), which drives a dosing recommendation.</p>
+
+<p>The pipeline has three independent data layers. PharmCAT's matcher only does the first arrow:</p>
+<pre><code>VCF variant calls ──▶ DIPLOTYPE        (the "matcher" — this guide)
+diplotype         ──▶ PHENOTYPE        (phenotypes.json — allele function/activity scores)
+phenotype + drug  ──▶ RECOMMENDATION   (prescribing_guidance.json — CPIC/DPWG/FDA)</code></pre>
+<p class="mut">Keep these separate in your head. A gene can be perfectly callable at layer 1 and yet useless clinically because layers 2–3 don't exist for it. (That is the whole CYP1A2 / CYP2C8 story — see §9.)</p>
+
+<h2 id="data">2. Where the rules live (the data)</h2>
+<p>Each gene ships one definition file, e.g. <code>CYP2C19_translation.json</code>. It has two parts that matter:</p>
+
+<h3>(a) <code>variants[]</code> — the fixed list of positions this gene cares about</h3>
+<p>Every position is already normalized to genomic VCF coordinates (GRCh38), with a reference and alternate base:</p>
+<pre><code>{ "position": 94761900, "rsid": "rs12248560", "ref": "C", "alts": ["T"],
+  "chromosomeHgvsName": "g.94761900C&gt;T" }     // CYP2C19, chr10</code></pre>
+
+<h3>(b) <code>namedAlleles[]</code> — each star allele as a parallel array of expected bases</h3>
+<p>The <code>alleles</code> array lines up 1:1 with <code>variants[]</code>. A value of <code>null</code> means "this allele doesn't constrain that position." Here is the <em>real</em> data (non-null entries only):</p>
+
+<table>
+<tr><th>Allele</th><th>PharmVar/PA id</th><th>Defining calls (position → base)</th></tr>
+<tr><td><code>*1</code></td><td>PA165980634</td><td><span class="mut">reference baseline — defines the "wild-type" base at the common positions</span></td></tr>
+<tr><td><code>*2</code></td><td>PA165980635</td><td><code>94775367:G</code>, <code>94775507:<span class="wob">R</span></code>, <code>94781859:A</code>, <code>94842866:G</code></td></tr>
+<tr><td><code>*3</code></td><td>PA165980636</td><td><code>94780653:A</code>, <code>94842866:G</code></td></tr>
+<tr><td><code>*17</code></td><td>PA165816533</td><td><code>94761900:T</code>, <code>94842866:G</code></td></tr>
+</table>
+<p class="filecite">Source: <code>src/main/resources/org/pharmgkb/pharmcat/definition/alleles/CYP2C19_translation.json</code> (35 positions, real values extracted from the file). The <span class="wob">R</span> at 94775507 is an IUPAC wobble — see §4.</p>
+
+<div class="panel note">
+That table <strong>is</strong> the rule set. "<code>*2</code> = G at 94775367 AND A at 94781859 AND …". No <code>if/else</code> anywhere — adding a gene means adding a file, not code.
+</div>
+
+<h2 id="algo">3. The algorithm, step by step</h2>
+<p>Top-level orchestration lives in <code>NamedAlleleMatcher.call()</code>, which builds a <code>MatchData</code> per gene and hands it to <code>DiplotypeMatcher.compute()</code>.</p>
+
+<div class="step"><div class="n">1</div><div class="b">
+<strong>Read the sample's calls at the gene's positions.</strong> For each position in <code>variants[]</code>, find the sample's genotype. Three outcomes: present (e.g. <code>C/T</code>), homozygous (<code>T/T</code>), or <strong>missing</strong> (no data).
+<div class="filecite"><code>MatchData</code> constructor — maps position → <code>SampleAllele</code>; tracks missing positions.</div>
+</div></div>
+
+<div class="step"><div class="n">2</div><div class="b">
+<strong>Adapt the definitions to what the sample actually has.</strong> If the sample is missing a position, the named alleles are truncated to only the positions present (<code>marshallHaplotypes()</code>). Positions a definition leaves <code>null</code> are filled with the reference base (<code>defaultMissingAllelesToReference()</code>).
+</div></div>
+
+<div class="step"><div class="n">3</div><div class="b">
+<strong>Generate every haplotype string the sample could carry.</strong> This is the key step. From the per-position calls, enumerate the possible single-chromosome sequences (<code>generateSamplePermutations()</code> → <code>CombinationUtil.generatePermutations()</code>). The number of permutations depends entirely on <em>phasing</em> (§6).
+</div></div>
+
+<div class="step"><div class="n">4</div><div class="b">
+<strong>Match each permutation against every allele's pattern.</strong> Each permutation is a string like <code>"94761900:T;94762706:A;…"</code>; each allele is a compiled regex. A hit is a <code>HaplotypeMatch</code> (<code>comparePermutations()</code>).
+</div></div>
+
+<div class="step"><div class="n">5</div><div class="b">
+<strong>Pair haplotype matches into diplotypes &amp; validate.</strong> <code>DiplotypeMatcher.compute()</code> pairs matched haplotypes and keeps only <em>complementary</em> pairs: at a homozygous position both must agree; at a heterozygous position they must differ (<code>isViableComplement()</code>).
+</div></div>
+
+<div class="step"><div class="n">6</div><div class="b">
+<strong>Score and rank.</strong> Each candidate diplotype gets a score = number of explicitly-defined positions it explains, minus penalties (wobble-collapsing-to-reference, partials). Sort descending; with <code>topCandidateOnly</code>, keep only the highest score. Ties ⇒ multiple reported diplotypes.
+</div></div>
+
+<h2 id="regex">4. Alleles are regexes</h2>
+<p>At load time, <code>NamedAllele.calculatePermutations()</code> turns each allele's call vector into one compiled <code>java.util.regex.Pattern</code> over the full position list:</p>
+<pre><code>position defined as a base  ->  that base        "94775367:G"
+IUPAC wobble (R = A or G)   ->  character class   "94775507:[AG]"
+position left null          ->  wildcard          "94762706:.*?"</code></pre>
+<p>So <code>*2</code> compiles to something like:</p>
+<pre><code>...;94775367:G;...;94775507:[AG];...;94781859:A;...;94842866:G;...</code></pre>
+<p>Matching is then literally <code>pattern.matcher(permutationString).matches()</code>. The wobble <code>[AG]</code> means <code>*2</code> matches whether the sample shows A or G there — but a wobble that collapses to the reference base costs a scoring point, so a more specific allele wins ties.</p>
+<div class="filecite"><code>definition/model/NamedAllele.java</code> · <code>calculatePermutations()</code>, <code>scoreForSample()</code>; IUPAC table in <code>haplotype/Iupac.java</code> (<code>R=[AG]</code>, <code>Y=[CT]</code>, <code>N=[ACGT]</code>, …).</div>
+
+<h2 id="worked">5. Worked example: CYP2C19</h2>
+<p>Two of the positions in play:</p>
+<ul class="tight">
+<li><code>94761900</code> (rs12248560): ref <code>C</code>, alt <code>T</code>. The <code>T</code> defines <code>*17</code>.</li>
+<li><code>94781859</code> (rs4244285): the <code>A</code> defines <code>*2</code>. (Plus <code>*2</code>'s other positions.)</li>
+</ul>
+
+<h3>Case A — homozygous / unambiguous</h3>
+<p>Sample is <code>T/T</code> at 94761900 and reference everywhere <code>*2</code> needs. Every position is homozygous ⇒ only <strong>one</strong> distinct haplotype string ⇒ it matches <code>*17</code> on both chromosomes. Result: <code>*17/*17</code>. No ambiguity, phasing irrelevant.</p>
+
+<h3>Case B — heterozygous at one allele's positions</h3>
+<p>Sample is <code>C/T</code> at 94761900, reference elsewhere. Two permutations: one chromosome carries <code>T</code> (→ <code>*17</code>), the other carries <code>C</code> (→ <code>*1</code> reference). Complement check passes (they differ at the het position). Result: <code>*1/*17</code>. Still unambiguous, because only one position varies.</p>
+
+<h3>Case C — heterozygous at <em>two</em> alleles' positions (the interesting one)</h3>
+<p>Sample is heterozygous at the <code>*17</code> position (<code>C/T</code> at 94761900) <strong>and</strong> heterozygous at a <code>*2</code> position (<code>G/A</code> at 94781859). Now the question is <em>cis vs trans</em>:</p>
+<table>
+<tr><th>Arrangement</th><th>Chromosome 1</th><th>Chromosome 2</th><th>Diplotype</th></tr>
+<tr><td><strong>trans</strong> (variants on opposite copies)</td><td><code>T</code> at 94761900 → <code>*17</code></td><td><code>A</code> at 94781859 → <code>*2</code></td><td><code>*2/*17</code></td></tr>
+<tr><td><strong>cis</strong> (both variants on the same copy)</td><td><code>T</code> + <code>A</code> → a combined/other allele</td><td>reference → <code>*1</code></td><td><code>*1/*</code>(combo)</td></tr>
+</table>
+<p>Both arrangements are consistent with the unphased genotype. Which one is real cannot be known from unphased calls — and that is precisely where phasing comes in.</p>
+
+<h2 id="phasing">6. Phasing: when it's used &amp; when it can be skipped</h2>
+<p>PharmCAT never <em>requires</em> phased input. Phasing only changes <strong>how many permutations step 3 produces</strong>, which changes how many candidate diplotypes survive. The decision is per-sample, derived from the data:</p>
+
+<pre><code>// MatchData.generateSamplePermutations()
+m_isEffectivelyPhased = (permutations.size() &lt;= 2);</code></pre>
+
+<table>
+<tr><th>Situation</th><th>Permutations</th><th>Phasing needed?</th></tr>
+<tr><td><strong>All positions homozygous</strong> (incl. all-reference)</td><td>1</td><td class="ok">No — only one possible haplotype</td></tr>
+<tr><td><strong>Heterozygous at ≤1 position</strong></td><td>≤2</td><td class="ok">No — arrangement is forced</td></tr>
+<tr><td><strong>Input is phased</strong> (VCF <code>GT</code> uses <code>|</code>, e.g. <code>0|1</code>, or carries <code>PS</code> phase sets)</td><td>2</td><td class="ok">Already resolved — follows the phase</td></tr>
+<tr><td><strong>Unphased &amp; het at ≥2 positions</strong></td><td>2<sup>k</sup> (grows)</td><td class="no">Yes, to disambiguate cis/trans</td></tr>
+</table>
+
+<p>The permutation generator branches on exactly this:</p>
+<pre><code>// CombinationUtil.generatePermutations(...)
+if (allele.isEffectivelyPhased() || isHaploid) {
+    // take ONE orientation — no branching
+} else if (allele.getPhaseSet() != null) {
+    // follow the phase set consistently (branch once per new PS)
+} else {
+    // UNPHASED het: branch BOTH ways (allele1-first AND allele2-first)
+}</code></pre>
+
+<div class="panel good">
+<span class="tag">Skip phasing when</span> the sample is homozygous everywhere, or heterozygous at only one position, or the genotype is already phased. In those cases the call is exact and identical to what phased data would give. The common case — homozygous reference at most positions — needs no phasing.
+</div>
+
+<div class="panel warn">
+<span class="tag">Phasing matters when</span> the sample is unphased <em>and</em> heterozygous at two or more positions that belong to different alleles. Then PharmCAT enumerates both cis and trans and cannot prefer one on sequence alone.
+</div>
+
+<h2 id="consequences">7. Consequences of skipping phasing</h2>
+<p>If you feed unphased, multi-het data (the realistic case for most VCFs), here is what actually happens — none of it is silent:</p>
+<ul>
+<li><strong>Multiple candidate diplotypes are reported.</strong> Both <code>*2/*17</code> and the cis alternative survive the complement check and tie on score, so PharmCAT returns <em>all</em> top-scoring diplotypes rather than guessing one. Downstream you may get a range of phenotypes.</li>
+<li><strong>Combination &amp; "partial" alleles get fuzzier.</strong> Whether two variants are on the same strand determines if they form one combined allele or two separate ones (<code>CombinationMatcher</code>). Unphased, both readings are kept.</li>
+<li><strong>For some genes PharmCAT deliberately picks the conservative answer.</strong> Genes like <code>CYP2D6</code> and <code>DPYD</code> use <code>callLowestFunctionGene()</code>: when phase is unknown, it assumes the arrangement that yields the <em>lowest-function</em> result, to avoid under-warning a poor metabolizer. Safe, but can over-call reduced function.</li>
+<li><strong>Phased input collapses the ambiguity.</strong> Provide <code>0|1</code> genotypes or <code>PS</code> tags (e.g. from a phased caller / read-backed phasing) and the same algorithm yields the single correct diplotype.</li>
+</ul>
+<div class="panel note">
+Net: skipping phasing never produces a <em>wrong-but-confident</em> single answer for these positions — it produces either an identical answer (when unambiguous) or an honest set of candidates (when ambiguous). The cost is <em>precision</em>, not silent error. The exception is the lowest-function genes, which trade precision for a deliberately conservative single call.
+</div>
+
+<h2 id="score">8. Scoring, combinations &amp; special genes</h2>
+<ul>
+<li><strong>Score = specificity.</strong> An allele's base score is its count of explicitly-defined (non-null) positions; collapsing a wobble to the reference base subtracts a point, and unexplained "partial" positions subtract too. So between two matching alleles, the one that explains <em>more</em> observed variants wins. This is the "elimination" you intuited, made quantitative.</li>
+<li><strong>Combination/partial alleles.</strong> <code>CombinationMatcher</code> handles a chromosome carrying variants from several alleles (non-overlapping core positions) and flags leftover variants as partials, so novel mixes still get described rather than dropped.</li>
+<li><strong>Complement validity</strong> (<code>isViableComplement()</code>) is what makes it a true diplotype search and not two independent haplotype lookups: the two calls must jointly reproduce the observed het/hom pattern at every position.</li>
+</ul>
+<div class="filecite">Files: <code>haplotype/NamedAlleleMatcher.java</code>, <code>MatchData.java</code>, <code>DiplotypeMatcher.java</code>, <code>CombinationMatcher.java</code>, <code>CombinationUtil.java</code>, <code>Iupac.java</code>; <code>definition/model/NamedAllele.java</code>.</div>
+
+<h2 id="pharmvar">9. Can you just download PharmVar CYP1A2 and run it?</h2>
+<p>This is the real question behind the CYP1A2 page. <strong>Short answer: the matcher engine is gene-agnostic and <em>would</em> run on CYP1A2 — but you cannot drop the website table in as-is, and even after you format it, you'd get a diplotype with no clinical meaning.</strong> Three distinct problems, in order of severity:</p>
+
+<h3>Problem 1 — Coordinates are in the wrong system (a transform, not a blocker)</h3>
+<p>PharmVar's table lists variants as <em>gene-relative</em> HGVS — <code>5347T&gt;C</code>, <code>-163C&gt;A</code>, <code>63C&gt;G (F21L)</code> — counted from the sequence start or the ATG, against <code>NG_061543.1</code> / <code>NM_000761.5</code>. The matcher needs <em>genomic</em> coordinates: chr15, a GRCh38 <code>position</code>, <code>ref</code>, and <code>alts</code> (because the VCF you genotype is in genomic coordinates).</p>
+<p>So you must lift each variant to GRCh38 and emit a <code>variants[]</code> + <code>namedAlleles[]</code> matrix. PharmVar's downloadable package (the <em>Download Gene Data</em> button, not the HTML table) actually ships GRCh37/GRCh38 VCF representations and RefSeqGene mappings, so the conversion is mechanical — but it <em>is</em> a required build step. This is essentially what CPIC/ClinPGx do to produce the <code>_translation.json</code> files PharmCAT ships.</p>
+
+<h3>Problem 2 — The suballele tree must be collapsed, and a reference defined</h3>
+<p>Look at the structure of the page: <code>*1.001 … *1.012</code>, <code>*30.001 … *30.017</code>. These are <strong>suballeles</strong> (sequence-level subvariants). PharmCAT models one vector per <em>core</em> star allele (<code>*1</code>, <code>*2</code>, …<code>*49</code>), not the whole tree. Two structural traps:</p>
+<ul>
+<li><strong>Near-ubiquitous tag SNPs.</strong> Almost every CYP1A2 allele lists <code>5347T&gt;C (rs2470890)</code>, and many add <code>5521A&gt;G (rs11636419)</code> — including most <code>*1</code> suballeles. These are common intronic/UTR tags that do <em>not</em> define function. If you naively make them defining positions, every allele overlaps every other allele and the regex matching can no longer discriminate. CPIC's curation drops or down-weights these; you'd have to too.</li>
+<li><strong>Nested / subset alleles.</strong> <code>*1.002</code> = just <code>5347T&gt;C</code>; <code>*30.001</code> = just <code>-163C&gt;A</code>; <code>*9.001</code> = <code>-163C&gt;A</code> + <code>248C&gt;T</code> + tags. Because some alleles' positions are subsets of others, a single sample matches many alleles, and the <em>score</em> (most-specific wins) plus <em>phasing</em> become essential. <code>*9</code> vs <code>*30</code> vs <code>*13</code> all share <code>-163C&gt;A</code> and differ only by an additional coding SNP — so an unphased double-het is genuinely ambiguous here, the §6/§7 problem in full force.</li>
+</ul>
+<p>You also need a designated <strong>reference allele</strong> expressed as actual bases at every position; <code>*1</code> (PV02647) shows <code>N/A</code> variants on the page (it's the baseline), but you must materialize its base at each modeled position so the "default to reference" step works.</p>
+
+<h3>Problem 3 — The clinical layers don't exist for CYP1A2 (the real blocker)</h3>
+<p>Every single allele on that page reads <strong>CPIC Clinical Function: N/A</strong>. That is the same reason CYP2C8 isn't in PharmCAT:</p>
+<ul>
+<li>No <code>phenotypes.json</code> entry ⇒ a called diplotype can't be turned into poor/normal/rapid metabolizer.</li>
+<li>No CPIC/DPWG/FDA guideline keyed on CYP1A2 ⇒ no drug recommendation to emit.</li>
+</ul>
+<p>So even with a perfectly built <code>CYP1A2_translation.json</code>, the matcher would print something like <code>CYP1A2 *1/*1F</code> and then have nothing to say about it. PharmCAT includes a gene only when all three layers exist; CYP1A2 has rich <em>allele</em> data but no <em>actionable function</em> data.</p>
+
+<div class="panel bad">
+<strong>Verdict.</strong> The PharmVar CYP1A2 data is the right raw material and the matching algorithm is genuinely gene-agnostic, so "run the same elimination over its star alleles" is conceptually valid. But you cannot use the page directly: you must (1) lift HGVS → GRCh38 VCF coordinates, (2) collapse the suballele tree to core alleles and prune ubiquitous tag SNPs so the vectors stay discriminating, and (3) accept that there is no phenotype/recommendation layer — so you'd get a genotype call with no clinical interpretation. Problems 1–2 are engineering; problem 3 is why it isn't worth shipping.
+</div>
+
+<div class="panel good">
+<strong>If you only want the genotype</strong> (research, not prescribing), it's very doable: build the translation file from PharmVar's <em>download package</em> (not the HTML), curate the defining vs tag positions, and feed it to the existing matcher unchanged. Expect heavy reliance on phasing for CYP1A2 because so many alleles are distinguished only by combinations of shared SNPs (§7).
+</div>
+
+<h2 id="checklist">10. Checklist to add a new gene</h2>
+<ol>
+<li>Get PharmVar's <strong>download package</strong> for the gene (includes GRCh38 VCF + allele table), not the web table.</li>
+<li>Pick the <strong>reference allele</strong> and the set of <strong>defining positions</strong> (drop ubiquitous non-functional tag SNPs).</li>
+<li>Lift every variant to genomic <code>position</code> / <code>ref</code> / <code>alts</code>; build <code>variants[]</code>.</li>
+<li>For each core star allele, emit the parallel <code>alleles[]</code> vector (<code>null</code> where unconstrained); use IUPAC codes only for genuine wobbles.</li>
+<li>Drop the file in <code>definition/alleles/</code> — the matcher needs <strong>no code changes</strong>; it will permute, regex-match, complement-check and score automatically.</li>
+<li>For clinical output, also supply a <code>phenotypes.json</code> function map and a guideline in <code>prescribing_guidance.json</code> — these do <em>not</em> come from PharmVar (they come from CPIC/DPWG/FDA) and are what's missing for CYP1A2.</li>
+</ol>
+
+<hr>
+<p class="mut" style="font-size:.85rem">Generated for the pharmcat-rs project. Algorithm details verified against the PharmCAT Java sources in <code>repos/PharmCAT/src/main/java/org/pharmgkb/pharmcat/haplotype/</code> and real definition data in <code>repos/PharmCAT/src/main/resources/.../definition/alleles/CYP2C19_translation.json</code>. PharmVar CYP1A2 data: pharmvar.org, gene CYP1A2, v6.2.25.</p>
+
+</div>
+</body>
+</html>
