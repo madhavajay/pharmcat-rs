@@ -125,9 +125,10 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - Java `PipelineTest.testUgt1a1na12717` is now covered by a Rust UGT1A1 fixture (`rs887829` `T/T`, `rs3064744` `CAT/CATAT` `0/1`) asserting matcher/source `*80/*80+*28` and recommendation alleles `{*80, *80+*28}` — homozygous `*80` with a heterozygous repeat splits into `*80` and `*80+*28`.
   - Java `PipelineTest.testUgt1a1s28homMissing` is now covered by a Rust UGT1A1 fixture (`rs887829` missing, `rs3064744` `CATAT/CATAT` `1/1`) asserting the exact ordered `[*28/*28, *28/*80+*28, *80+*28/*80+*28]` partial match (matcher + report source diplotypes) and all three recommendation diplotypes.
   - Java `PipelineTest.testUgt1a1s28s60Hom` is now covered by a Rust UGT1A1 fixture (`rs3064744` `CAT/CATAT` `0/1`) asserting matcher/source `*1/*28` and recommendation alleles `{*1, *28}`.
+  - Java `PipelineTest.testUgt1a1s27s28unphaseds80s60missing` is now covered by a Rust UGT1A1 fixture (`rs887829` missing, `rs3064744` `CAT/CATAT` `0/1`, `rs35350960` `C/A` `0/1`) asserting the exact ordered `[*27/*28, *27/*80+*28]` partial match (matcher + report source diplotypes) and both recommendation diplotypes.
 - Next unblocked slice:
   - Run Java reference tests once Gradle can resolve locally, then record exact Java pass/fail/skip counts.
-  - Port Java `PipelineTest.testUgt1a1s27s28unphaseds80s60missing` (`rs887829` missing, `rs3064744` `TA(8)/TA(7)`, `rs35350960` `C/A`), covering the `[*27/*28, *27/*80+*28]` partial match.
+  - Port Java `PipelineTest.testUgt1a1HG00436` (phased `rs887829` `T/C`, `rs3064744` `TA(8)/TA(7)`, `rs35350960` `A/C`), the first UGT1A1 `testNotCalledByMatcher` (NoCall) pipeline slice.
   - Promote the first Java-vs-Rust reporter-output comparison for the CLI VCF path once the Java reference gate is available, using the existing CYP3A5 haplotyper fixture as the initial promoted parity case.
   - Continue tightening matcher HTML toward full Java `ResultSerializer` parity by promoting a Java-vs-Rust matcher HTML fixture comparison once the Java reference gate is available.
   - Add a small generated-definition VCF fixture utility or shared test helper if more multi-gene pipeline tests need the same definition-to-reference-row setup.
