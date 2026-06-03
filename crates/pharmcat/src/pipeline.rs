@@ -6339,6 +6339,76 @@ mod tests {
     }
 
     #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s6_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, &[("rs4148323", "A", "1/1")], &[]);
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s6.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*6 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*6"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*6/*6"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        assert_eq!(
+            recommendation
+                .allele1
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*6")
+        );
+        assert_eq!(
+            recommendation
+                .allele2
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*6")
+        );
+    }
+
+    #[test]
     fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_unphased_like_java_pipeline_test() {
         let definition =
             read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
