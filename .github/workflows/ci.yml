@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main, madhava/first]
   pull_request:
   workflow_dispatch:
 
