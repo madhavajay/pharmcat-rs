@@ -5954,6 +5954,118 @@ mod tests {
     }
 
     #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1_s80_s28_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0/1"), ("rs3064744", "CATAT", "0/1")],
+            &[],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s1-s80-s28.vcf", &vcf);
+        let output_dir = unique_temp_path("pipeline-ugt1a1-s1-s80-s28-output");
+        let outputs = PipelineOutputPlan {
+            base_dir: output_dir.clone(),
+            basename: "pipeline-ugt1a1-s1-s80-s28".to_owned(),
+            display_name: "pipeline-ugt1a1-s1-s80-s28.vcf".to_owned(),
+            reporter_title: Some("PharmCAT".to_owned()),
+            matcher_json: None,
+            matcher_html: None,
+            matcher_warnings: None,
+            phenotyper_json: None,
+            reporter_html: Some(output_dir.join("pipeline-ugt1a1-s1-s80-s28.report.html")),
+            reporter_json: Some(output_dir.join("pipeline-ugt1a1-s1-s80-s28.report.json")),
+            reporter_calls_only_tsv: None,
+        };
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            Some(&outputs),
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *1/*80+*28 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*1/*80+*28"));
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+        assert_eq!(
+            ugt1a1
+                .recommendation_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        assert_eq!(
+            recommendation
+                .allele1
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*1")
+        );
+        assert_eq!(
+            recommendation
+                .allele2
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*80+*28")
+        );
+
+        let reporter_json =
+            fs::read_to_string(outputs.reporter_json.as_ref().unwrap()).expect("reporter JSON");
+        assert!(reporter_json.contains("*1/*80+*28"));
+        let html = fs::read_to_string(outputs.reporter_html.as_ref().unwrap()).expect("html");
+        assert!(html.contains("UGT1A1"));
+        assert!(html.contains("*1/*80+*28"));
+    }
+
+    #[test]
     fn run_cli_config_wires_parsed_vcf_args_to_reporter_outputs() {
         let definition_dir = unique_temp_path("pharmcat-cli-definitions");
         fs::create_dir_all(&definition_dir).expect("definition dir");
