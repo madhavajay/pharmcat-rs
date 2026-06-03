@@ -2255,11 +2255,31 @@ fn source_diplotype_label(diplotype: &AnnotatedDiplotype) -> Option<String> {
         (Some(allele1), Some(allele2)) => Some(format!("{allele1}/{allele2}")),
         (Some(allele1), None) => Some(allele1.clone()),
         (None, Some(allele2)) => Some(allele2.clone()),
-        (None, None) => diplotype
-            .phenotypes
-            .first()
-            .cloned()
-            .or_else(|| diplotype.activity_score.clone()),
+        (None, None) => {
+            // Match report_diplotype_label: an activity-score-only call prints "phenotype (score)".
+            if let Some(score) = diplotype
+                .activity_score
+                .as_deref()
+                .filter(|score| !is_unspecified(score))
+            {
+                if diplotype.phenotypes.is_empty()
+                    || diplotype
+                        .phenotypes
+                        .iter()
+                        .any(|value| value == "No Result")
+                {
+                    Some(score.to_owned())
+                } else {
+                    Some(format!("{} ({score})", diplotype.phenotypes.join("/")))
+                }
+            } else {
+                diplotype
+                    .phenotypes
+                    .first()
+                    .cloned()
+                    .or_else(|| diplotype.activity_score.clone())
+            }
+        }
     }
 }
 
@@ -9391,9 +9411,11 @@ mod tests {
         assert_eq!(source_allele2.function, "Decreased function");
         assert!(!source_allele2.reference);
         assert_eq!(source_allele2.activity_value.as_deref(), Some("0.5"));
+        // Java DiplotypeMatch score sums the two NamedAllele scores from the definition JSON:
+        // Reference (83) + c.2846A>T (1) = 84. (The earlier 166 was a wrong 2xReference guess.)
         assert_eq!(
             report_gene.source_diplotypes[0].match_score.as_deref(),
-            Some("166")
+            Some("84")
         );
         assert!(!report_gene.source_diplotypes[0].inferred);
         assert!(
@@ -10728,9 +10750,11 @@ mod tests {
         assert_eq!(source_allele2.function, "Malignant Hyperthermia associated");
         assert!(!source_allele2.reference);
         assert_eq!(source_allele2.activity_value, None);
+        // Java DiplotypeMatch score sums the two NamedAllele scores from the definition JSON:
+        // Reference (313) + c.97A>G (1) = 314. (The earlier 626 was a wrong 2xReference guess.)
         assert_eq!(
             report_gene.source_diplotypes[0].match_score.as_deref(),
-            Some("626")
+            Some("314")
         );
         assert!(!report_gene.source_diplotypes[0].inferred);
         assert!(

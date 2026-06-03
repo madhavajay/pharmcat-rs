@@ -1968,6 +1968,11 @@ mod tests {
     const SLCO1B1_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/SLCO1B1_translation.json";
     const TPMT_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/TPMT_translation.json";
     const UGT1A1_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/UGT1A1_translation.json";
+    const CYP3A5_MAIN_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/CYP3A5_translation.json";
+    const CYP2C9_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/CYP2C9_translation.json";
+    const CYP3A4_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/CYP3A4_translation.json";
+    const IFNL3_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/IFNL3_translation.json";
+    const VKORC1_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/VKORC1_translation.json";
 
     #[test]
     fn unix_millis_to_iso8601_matches_java_instant_shape() {
@@ -5951,6 +5956,2296 @@ mod tests {
         let html = fs::read_to_string(outputs.reporter_html.as_ref().unwrap()).expect("html");
         assert!(html.contains("UGT1A1"));
         assert!(html.contains("*1/*1"));
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1_s80_s28_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0/1"), ("rs3064744", "CATAT", "0/1")],
+            &[],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s1-s80-s28.vcf", &vcf);
+        let output_dir = unique_temp_path("pipeline-ugt1a1-s1-s80-s28-output");
+        let outputs = PipelineOutputPlan {
+            base_dir: output_dir.clone(),
+            basename: "pipeline-ugt1a1-s1-s80-s28".to_owned(),
+            display_name: "pipeline-ugt1a1-s1-s80-s28.vcf".to_owned(),
+            reporter_title: Some("PharmCAT".to_owned()),
+            matcher_json: None,
+            matcher_html: None,
+            matcher_warnings: None,
+            phenotyper_json: None,
+            reporter_html: Some(output_dir.join("pipeline-ugt1a1-s1-s80-s28.report.html")),
+            reporter_json: Some(output_dir.join("pipeline-ugt1a1-s1-s80-s28.report.json")),
+            reporter_calls_only_tsv: None,
+        };
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            Some(&outputs),
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *1/*80+*28 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*1/*80+*28"));
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+        assert_eq!(
+            ugt1a1
+                .recommendation_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        assert_eq!(
+            recommendation
+                .allele1
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*1")
+        );
+        assert_eq!(
+            recommendation
+                .allele2
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*80+*28")
+        );
+
+        let reporter_json =
+            fs::read_to_string(outputs.reporter_json.as_ref().unwrap()).expect("reporter JSON");
+        assert!(reporter_json.contains("*1/*80+*28"));
+        let html = fs::read_to_string(outputs.reporter_html.as_ref().unwrap()).expect("html");
+        assert!(html.contains("UGT1A1"));
+        assert!(html.contains("*1/*80+*28"));
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s28_s37_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs3064744", "CATAT,CATATAT", "1/2")],
+            &[],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s28-s37.vcf", &vcf);
+        let output_dir = unique_temp_path("pipeline-ugt1a1-s28-s37-output");
+        let outputs = PipelineOutputPlan {
+            base_dir: output_dir.clone(),
+            basename: "pipeline-ugt1a1-s28-s37".to_owned(),
+            display_name: "pipeline-ugt1a1-s28-s37.vcf".to_owned(),
+            reporter_title: Some("PharmCAT".to_owned()),
+            matcher_json: None,
+            matcher_html: None,
+            matcher_warnings: None,
+            phenotyper_json: None,
+            reporter_html: Some(output_dir.join("pipeline-ugt1a1-s28-s37.report.html")),
+            reporter_json: Some(output_dir.join("pipeline-ugt1a1-s28-s37.report.json")),
+            reporter_calls_only_tsv: None,
+        };
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            Some(&outputs),
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *28/*37 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*28/*37"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*28/*37"));
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*28/*37"]
+        );
+        // Java testRecommendedDiplotypes compares an unordered count map, so *37/*28 is a set.
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*28"), Some("*37")]);
+
+        let reporter_json =
+            fs::read_to_string(outputs.reporter_json.as_ref().unwrap()).expect("reporter JSON");
+        assert!(reporter_json.contains("*28/*37"));
+        let html = fs::read_to_string(outputs.reporter_html.as_ref().unwrap()).expect("html");
+        assert!(html.contains("UGT1A1"));
+        assert!(html.contains("*28/*37"));
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s28_s80_phased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0|1"), ("rs3064744", "CATAT", "0|1")],
+            &[],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s28-s80-phased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                message_catalog: Some(messages),
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *1/*80+*28 phased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*1/*80+*28"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*1"), Some("*80+*28")]);
+
+        // Phased data suppresses the *1/*80+*28 ambiguity message on atazanavir.
+        assert_eq!(matched_annotation_count(&run.context, "atazanavir"), 2);
+        assert_eq!(
+            run.context
+                .drug_report(PrescribingGuidanceSource::CpicGuideline, "atazanavir")
+                .map(|report| report.matched_annotation_count()),
+            Some(1)
+        );
+        assert_eq!(
+            run.context
+                .drug_report(PrescribingGuidanceSource::DpwgGuideline, "atazanavir")
+                .map(|report| report.matched_annotation_count()),
+            Some(1)
+        );
+        assert_eq!(
+            run.context
+                .drug_report(PrescribingGuidanceSource::CpicGuideline, "atazanavir")
+                .expect("atazanavir CPIC report")
+                .messages
+                .len(),
+            0
+        );
+
+        assert_eq!(ugt1a1.messages.len(), 2);
+        assert!(
+            ugt1a1
+                .messages
+                .iter()
+                .any(|message| message.name == "reference-allele")
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_phased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Java phases allele1/allele2 left/right: hap1 = *80+*28 (T, CATAT), hap2 = *6 (rs4148323 A).
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[
+                ("rs887829", "T", "1|0"),
+                ("rs3064744", "CATAT", "1|0"),
+                ("rs4148323", "A", "0|1"),
+            ],
+            &[],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s80-s28-phased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*80+*28 phased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*6/*80+*28"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*6"), Some("*80+*28")]);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s6_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, &[("rs4148323", "A", "1/1")], &[]);
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s6.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*6 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*6"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*6/*6"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        assert_eq!(
+            recommendation
+                .allele1
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*6")
+        );
+        assert_eq!(
+            recommendation
+                .allele2
+                .as_ref()
+                .map(|haplotype| haplotype.name.as_str()),
+            Some("*6")
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_missing_phased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Phased with rs3064744 missing: hap1 = *6 (rs4148323 A), hap2 = *80 (rs887829 T) but the
+        // missing repeat leaves *80, *80+*28, and *80+*37 indistinguishable.
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0|1"), ("rs4148323", "A", "1|0")],
+            &["rs3064744"],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s80-s28-missing-phased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*80 missing phased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*6/*80", "*6/*80+*28", "*6/*80+*37"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s80_s28_missing_grouped_recommendations_like_java_pipeline_test()
+     {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0/1")],
+            &["rs3064744"],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s80-s28-missing.vcf", &vcf);
+        let output_dir = unique_temp_path("pipeline-ugt1a1-s80-s28-missing-output");
+        let outputs = PipelineOutputPlan {
+            base_dir: output_dir.clone(),
+            basename: "pipeline-ugt1a1-s80-s28-missing".to_owned(),
+            display_name: "pipeline-ugt1a1-s80-s28-missing.vcf".to_owned(),
+            reporter_title: Some("PharmCAT".to_owned()),
+            matcher_json: None,
+            matcher_html: None,
+            matcher_warnings: None,
+            phenotyper_json: None,
+            reporter_html: Some(output_dir.join("pipeline-ugt1a1-s80-s28-missing.report.html")),
+            reporter_json: Some(output_dir.join("pipeline-ugt1a1-s80-s28-missing.report.json")),
+            reporter_calls_only_tsv: None,
+        };
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            Some(&outputs),
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *1/*80 missing pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80", "*1/*80+*28", "*1/*80+*37"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*1/*80", "*1/*80+*28", "*1/*80+*37"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+
+        // Java selects two .cpic-guideline-atazanavir rows: the first lists *1/*80 alone, the
+        // second groups *1/*80+*28 and *1/*80+*37 under one recommendation.
+        let html = fs::read_to_string(outputs.reporter_html.as_ref().unwrap()).expect("html");
+        let rows = atazanavir_ugt1a1_rx_dip_rows(&html);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["*1/*80".to_owned()],
+                vec!["*1/*80+*28".to_owned(), "*1/*80+*37".to_owned()],
+            ]
+        );
+    }
+
+    /// Extract the ordered UGT1A1 `rx-dip` diplotype labels per `cpic-guideline-atazanavir` row,
+    /// mirroring Java's `document.select(".cpic-guideline-atazanavir") .. .select(".rx-dip")`.
+    fn atazanavir_ugt1a1_rx_dip_rows(html: &str) -> Vec<Vec<String>> {
+        const DIP_PAT: &str = "rx-dip\"><a href=\"#UGT1A1\">UGT1A1</a>:";
+        html.split("cpic-guideline-atazanavir")
+            .skip(1)
+            .map(|section| {
+                let row = section.split("</tr>").next().unwrap_or(section);
+                row.match_indices(DIP_PAT)
+                    .map(|(index, pattern)| {
+                        row[index + pattern.len()..]
+                            .split('<')
+                            .next()
+                            .unwrap_or("")
+                            .to_owned()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_na12717_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Homozygous *80 (rs887829 T/T) with a heterozygous repeat (CAT/CATAT) splits the haplotypes
+        // into *80 and *80+*28.
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "1/1"), ("rs3064744", "CATAT", "0/1")],
+            &[],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-na12717.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *80/*80+*28 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*80/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*80/*80+*28"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*80"), Some("*80+*28")]);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s28_hom_missing_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Homozygous *28 (rs3064744 CATAT/CATAT) with rs887829 missing leaves *80 status unknown, so
+        // each *28 could also be *80+*28.
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs3064744", "CATAT", "1/1")],
+            &["rs887829"],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s28-hom-missing.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *28 hom missing pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*28/*28", "*28/*80+*28", "*80+*28/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*28/*28", "*28/*80+*28", "*80+*28/*80+*28"]
+        );
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*28/*28", "*28/*80+*28", "*80+*28/*80+*28"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1_s28_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, &[("rs3064744", "CATAT", "0/1")], &[]);
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s1-s28.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *1/*28 pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*1/*28"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*1"), Some("*28")]);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s27_s28_unphased_s80_missing_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // *27 (rs35350960 A) over a het *28 repeat, with rs887829 missing so *80 status is unknown.
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs3064744", "CATAT", "0/1"), ("rs35350960", "A", "0/1")],
+            &["rs887829"],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s27-s28-s80-missing.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *27/*28 missing pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*27/*28", "*27/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*27/*28", "*27/*80+*28"]
+        );
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*27/*28", "*27/*80+*28"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_hg00436_not_called_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Phased hap1 carries *80 (T) + *28 (CATAT) + *27 (A) together, which no single named allele
+        // describes with combinations disabled, so the matcher cannot call UGT1A1.
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[
+                ("rs887829", "T", "1|0"),
+                ("rs3064744", "CATAT", "1|0"),
+                ("rs35350960", "A", "1|0"),
+            ],
+            &[],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-hg00436.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 HG00436 not-called pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(
+            matches!(result.kind, GeneCallKind::NoCall),
+            "expected UGT1A1 matcher no-call, got {:?}",
+            result.kind
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("Unknown/Unknown"));
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1s80s27s60s28_missing_phased_not_called_like_java_pipeline_test()
+     {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Phased hap1 carries *80 (T) + *27 (A) with the *28 repeat missing; no single named allele
+        // describes that pair with combinations disabled, so the matcher cannot call UGT1A1, but the
+        // report still reflects phased input.
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "1|0"), ("rs35350960", "A", "1|0")],
+            &["rs3064744"],
+            "0|0",
+        );
+        let vcf_file =
+            write_temp_named_file("pipeline-ugt1a1-s1s80s27s60s28-missing-phased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 s1s80s27s60s28 missing phased not-called pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(
+            matches!(result.kind, GeneCallKind::NoCall),
+            "expected UGT1A1 matcher no-call, got {:?}",
+            result.kind
+        );
+        assert!(result.match_data.phased);
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("Unknown/Unknown"));
+        assert!(ugt1a1.phased);
+    }
+
+    fn run_cyp3a5_unphased_pipeline(
+        name: &str,
+        overrides: &[(&str, &str, &str)],
+        missing_rsids: &[&str],
+        with_messages: bool,
+    ) -> ReporterPipelineRun {
+        let definition = read_definition_file(Path::new(CYP3A5_MAIN_DEFINITION_PATH))
+            .expect("CYP3A5 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let message_catalog = if with_messages {
+            Some(MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages"))
+        } else {
+            None
+        };
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, overrides, missing_rsids);
+        let vcf_file = write_temp_named_file(&format!("{name}.vcf"), &vcf);
+
+        run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                message_catalog,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("CYP3A5 unphased pipeline run")
+    }
+
+    fn assert_cyp3a5_call(run: &ReporterPipelineRun, expected: &str, allele1: &str, allele2: &str) {
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "CYP3A5")
+            .expect("CYP3A5 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected CYP3A5 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            [expected]
+        );
+        let cyp3a5 = run.context.gene_report("CYP3A5").expect("CYP3A5 report");
+        assert_eq!(cyp3a5.source_diplotype.as_deref(), Some(expected));
+        let recommendation = &cyp3a5.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        let mut expected_alleles = [Some(allele1), Some(allele2)];
+        expected_alleles.sort();
+        assert_eq!(alleles, expected_alleles);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_v1_like_java_pipeline_test() {
+        let run = run_cyp3a5_unphased_pipeline(
+            "pipeline-cyp3a5-v1",
+            &[("rs776746", "C", "0/1")],
+            &[],
+            false,
+        );
+        assert_cyp3a5_call(&run, "*1/*3", "*1", "*3");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_v2_like_java_pipeline_test() {
+        let run = run_cyp3a5_unphased_pipeline(
+            "pipeline-cyp3a5-v2",
+            &[("rs28383479", "T", "0/1"), ("rs776746", "C", "0/1")],
+            &[],
+            false,
+        );
+        assert_cyp3a5_call(&run, "*3/*9", "*3", "*9");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_v3_like_java_pipeline_test() {
+        let run = run_cyp3a5_unphased_pipeline(
+            "pipeline-cyp3a5-v3",
+            &[("rs776746", "C", "1/1")],
+            &[],
+            false,
+        );
+        assert_cyp3a5_call(&run, "*3/*3", "*3", "*3");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_v4_like_java_pipeline_test() {
+        let run = run_cyp3a5_unphased_pipeline(
+            "pipeline-cyp3a5-v4",
+            &[("rs776746", "C", "0/1")],
+            &[],
+            false,
+        );
+        assert_cyp3a5_call(&run, "*1/*3", "*1", "*3");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_v5_like_java_pipeline_test() {
+        let run = run_cyp3a5_unphased_pipeline(
+            "pipeline-cyp3a5-v5",
+            &[("rs28383479", "T", "0/1"), ("rs776746", "C", "0/1")],
+            &[],
+            false,
+        );
+        assert_cyp3a5_call(&run, "*3/*9", "*3", "*9");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a5_missing3_message_like_java_pipeline_test() {
+        let run =
+            run_cyp3a5_unphased_pipeline("pipeline-cyp3a5-missing3", &[], &["rs776746"], true);
+        assert_cyp3a5_call(&run, "*1/*1", "*1", "*1");
+
+        let cyp3a5 = run.context.gene_report("CYP3A5").expect("CYP3A5 report");
+        assert!(!cyp3a5.phased);
+        assert!(
+            cyp3a5
+                .variant_reports
+                .iter()
+                .any(|variant| variant.is_missing()
+                    && variant.db_snp_id.as_deref() == Some("rs776746")),
+            "rs776746 should be a missing variant report"
+        );
+
+        // Java asserts no tacrolimus CPIC guideline annotation has an empty message list.
+        let tacrolimus = run
+            .context
+            .drug_report(PrescribingGuidanceSource::CpicGuideline, "tacrolimus")
+            .expect("tacrolimus CPIC report");
+        assert!(
+            !tacrolimus.messages.is_empty(),
+            "tacrolimus CPIC report should have a missing-position message"
+        );
+    }
+
+    fn gene_source_phenotypes(context: &ReportContext, gene: &str) -> Vec<String> {
+        context
+            .gene_report(gene)
+            .map(|report| {
+                report
+                    .source_diplotypes
+                    .iter()
+                    .flat_map(|diplotype| diplotype.phenotypes.iter().cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn assert_matched_from_source(
+        context: &ReportContext,
+        drug: &str,
+        source: PrescribingGuidanceSource,
+        expected: usize,
+    ) {
+        let actual = context
+            .drug_report(source, drug)
+            .map(|report| report.matched_annotation_count())
+            .unwrap_or(0);
+        assert_eq!(actual, expected, "{drug} {source:?} matched annotations");
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_hlab_outside_call_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(CYP2C9_DEFINITION_PATH)).expect("CYP2C9 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
+        let vcf_file = write_temp_named_file("pipeline-hlab.vcf", &vcf);
+        let outside_file =
+            write_temp_named_file("pipeline-hlab.outside.tsv", "HLA-B\t*15:02/*57:01\n");
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                outside_call_files: vec![outside_file],
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("HLA-B outside call pipeline run");
+
+        let cyp2c9 = run.context.gene_report("CYP2C9").expect("CYP2C9 report");
+        assert_eq!(cyp2c9.source_diplotype.as_deref(), Some("*1/*1"));
+
+        // HLA-B is never called by the matcher; it only arrives as an outside call.
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "HLA-B"),
+            "HLA-B should not be called by the matcher"
+        );
+        let hlab = run.context.gene_report("HLA-B").expect("HLA-B report");
+        assert!(hlab.outside_call);
+        let phenotypes = gene_source_phenotypes(&run.context, "HLA-B");
+        for expected in ["*57:01 positive", "*58:01 negative", "*15:02 positive"] {
+            assert!(
+                phenotypes.iter().any(|phenotype| phenotype == expected),
+                "missing HLA-B phenotype {expected} in {phenotypes:?}"
+            );
+        }
+
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::DpwgGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "allopurinol",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_eq!(matched_annotation_count(&run.context, "phenytoin"), 6);
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::CpicGuideline,
+            2,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::DpwgGuideline,
+            2,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaLabel,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaAssoc,
+            1,
+        );
+    }
+
+    fn run_hlab_outside_pipeline(
+        name: &str,
+        cyp2c9_overrides: &[(&str, &str, &str)],
+        outside_line: &str,
+    ) -> ReporterPipelineRun {
+        let definition =
+            read_definition_file(Path::new(CYP2C9_DEFINITION_PATH)).expect("CYP2C9 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, cyp2c9_overrides, &[]);
+        let vcf_file = write_temp_named_file(&format!("{name}.vcf"), &vcf);
+        let outside_file = write_temp_named_file(&format!("{name}.outside.tsv"), outside_line);
+
+        run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                outside_call_files: vec![outside_file],
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("HLA-B outside call pipeline run")
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_single_hlab_allele_like_java_pipeline_test() {
+        let run = run_hlab_outside_pipeline("pipeline-single-hlab", &[], "HLA-B\t*15:02\n");
+
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "HLA-B"),
+            "HLA-B should not be called by the matcher"
+        );
+        let hlab = run.context.gene_report("HLA-B").expect("HLA-B report");
+        assert!(hlab.outside_call);
+        let phenotypes = gene_source_phenotypes(&run.context, "HLA-B");
+        for expected in ["*57:01 negative", "*58:01 negative", "*15:02 positive"] {
+            assert!(
+                phenotypes.iter().any(|phenotype| phenotype == expected),
+                "missing HLA-B phenotype {expected} in {phenotypes:?}"
+            );
+        }
+
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "allopurinol",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_eq!(matched_annotation_count(&run.context, "phenytoin"), 6);
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::CpicGuideline,
+            2,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::DpwgGuideline,
+            2,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaLabel,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaAssoc,
+            1,
+        );
+
+        // carbamazepine-DPWG (HLA-B single-gene lookup) matches on *15:02 positive.
+        assert_matched_from_source(
+            &run.context,
+            "carbamazepine",
+            PrescribingGuidanceSource::DpwgGuideline,
+            1,
+        );
+        // NOTE: Java also asserts carbamazepine CPIC == 3 here. That CPIC guideline is a two-gene
+        // (HLA-A + HLA-B) lookup whose recommendations key HLA-A as "No Result" when HLA-A has no
+        // data. Java's Phenotyper seeds an unspecified ("No Result") GeneReport for every
+        // guideline-referenced gene with no input (Phenotyper.listUnspecifiedGenes /
+        // GeneReport.unspecifiedGeneReport), so the genotype combination includes HLA-A="No Result".
+        // The Rust ReportContext does not yet seed those unspecified gene reports, so the two-gene
+        // lookup with a fully-absent gene returns 0. Tracked as the next slice in TODO.md.
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_hlab_phenotype_outside_call_like_java_pipeline_test() {
+        // Outside call with an empty diplotype column and a phenotype-only third column.
+        let run = run_hlab_outside_pipeline(
+            "pipeline-hlab-phenotype",
+            &[("rs1799853", "T", "0/1")],
+            "HLA-B\t\t*57:01 positive\n",
+        );
+
+        let cyp2c9 = run.context.gene_report("CYP2C9").expect("CYP2C9 report");
+        assert_eq!(cyp2c9.source_diplotype.as_deref(), Some("*1/*2"));
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "HLA-B"),
+            "HLA-B should not be called by the matcher"
+        );
+        assert!(
+            run.context
+                .gene_report("HLA-B")
+                .is_some_and(|report| report.outside_call)
+        );
+
+        assert_eq!(matched_annotation_count(&run.context, "abacavir"), 4);
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::DpwgGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::FdaLabel,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "abacavir",
+            PrescribingGuidanceSource::FdaAssoc,
+            1,
+        );
+        // allopurinol relies on a different allele, so no matches.
+        assert_eq!(matched_annotation_count(&run.context, "allopurinol"), 0);
+        // phenytoin: DPWG/FDA_ASSOC match via the HLA-B side; CPIC/FDA_LABEL do not.
+        assert_eq!(matched_annotation_count(&run.context, "phenytoin"), 2);
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::CpicGuideline,
+            0,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::DpwgGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaLabel,
+            0,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::FdaAssoc,
+            1,
+        );
+    }
+
+    fn run_single_gene_unphased_pipeline(
+        definition_path: &str,
+        name: &str,
+        overrides: &[(&str, &str, &str)],
+        missing_rsids: &[&str],
+    ) -> ReporterPipelineRun {
+        let definition = read_definition_file(Path::new(definition_path)).expect("gene definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, overrides, missing_rsids);
+        let vcf_file = write_temp_named_file(&format!("{name}.vcf"), &vcf);
+
+        run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("single gene pipeline run")
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_warfarin_dpwg_like_java_pipeline_test() {
+        let cyp2c9 =
+            read_definition_file(Path::new(CYP2C9_DEFINITION_PATH)).expect("CYP2C9 definition");
+        let vkorc1 =
+            read_definition_file(Path::new(VKORC1_DEFINITION_PATH)).expect("VKORC1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [
+                (cyp2c9.gene_symbol.clone(), cyp2c9.clone()),
+                (vkorc1.gene_symbol.clone(), vkorc1.clone()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &cyp2c9, &[("rs1057910", "C", "1/1")], &[]);
+        append_definition_vcf_rows(&mut vcf, &vkorc1, &[("rs9923231", "T", "1/1")], &[]);
+        let vcf_file = write_temp_named_file("pipeline-warfarin-dpwg.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("warfarin DPWG pipeline run");
+
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C9"),
+            "CYP2C9 should be called by the matcher"
+        );
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "VKORC1"),
+            "VKORC1 should be called by the matcher"
+        );
+        let cyp2c9_report = run.context.gene_report("CYP2C9").expect("CYP2C9 report");
+        assert_eq!(cyp2c9_report.source_diplotype.as_deref(), Some("*3/*3"));
+
+        // warfarin DPWG has two separate single-gene annotations (CYP2C9 and VKORC1), both present.
+        assert_matched_from_source(
+            &run.context,
+            "warfarin",
+            PrescribingGuidanceSource::DpwgGuideline,
+            2,
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_mtrnr1_outside_call_like_java_pipeline_test() {
+        let cyp2c19 =
+            read_definition_file(Path::new(CYP2C19_DEFINITION_PATH)).expect("CYP2C19 definition");
+        let cyp2c9 =
+            read_definition_file(Path::new(CYP2C9_DEFINITION_PATH)).expect("CYP2C9 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [
+                (cyp2c19.gene_symbol.clone(), cyp2c19.clone()),
+                (cyp2c9.gene_symbol.clone(), cyp2c9.clone()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &cyp2c19, &[], &[]);
+        append_definition_vcf_rows(&mut vcf, &cyp2c9, &[], &[]);
+        let vcf_file = write_temp_named_file("pipeline-mtrnr1.vcf", &vcf);
+        let outside_file =
+            write_temp_named_file("pipeline-mtrnr1.outside.tsv", "MT-RNR1\tm.1555A>G\n");
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                outside_call_files: vec![outside_file],
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("MT-RNR1 outside call pipeline run");
+
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C19"),
+            "CYP2C19 should be called by the matcher"
+        );
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C9"),
+            "CYP2C9 should be called by the matcher"
+        );
+        let mtrnr1 = run.context.gene_report("MT-RNR1").expect("MT-RNR1 report");
+        assert!(mtrnr1.outside_call);
+
+        assert_matched_from_source(
+            &run.context,
+            "amikacin",
+            PrescribingGuidanceSource::CpicGuideline,
+            1,
+        );
+        assert_matched_from_source(
+            &run.context,
+            "amikacin",
+            PrescribingGuidanceSource::FdaLabel,
+            1,
+        );
+    }
+
+    fn run_cyp2c19_reference_with_outside_pipeline(
+        name: &str,
+        outside_line: &str,
+    ) -> ReporterPipelineRun {
+        let definition =
+            read_definition_file(Path::new(CYP2C19_DEFINITION_PATH)).expect("CYP2C19 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
+        let vcf_file = write_temp_named_file(&format!("{name}.vcf"), &vcf);
+        let outside_file = write_temp_named_file(&format!("{name}.outside.tsv"), outside_line);
+
+        run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                outside_call_files: vec![outside_file],
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("CYP2C19 reference + outside pipeline run")
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_outside_call_activity_score_and_phenotype_like_java_pipeline_test() {
+        // CYP2D6 outside call with diplotype + explicit phenotype override + activity score.
+        let run = run_cyp2c19_reference_with_outside_pipeline(
+            "pipeline-outside-score-and-phenotype",
+            "CYP2D6\t*2/*10\tIntermediate Metabolizer\t1.25\n",
+        );
+
+        let cyp2c19 = run.context.gene_report("CYP2C19").expect("CYP2C19 report");
+        assert_eq!(cyp2c19.source_diplotype.as_deref(), Some("*38/*38"));
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C19"),
+            "CYP2C19 should be called by the matcher"
+        );
+
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2D6"),
+            "CYP2D6 should not be called by the matcher"
+        );
+        let cyp2d6 = run.context.gene_report("CYP2D6").expect("CYP2D6 report");
+        assert!(cyp2d6.outside_call);
+        assert_eq!(cyp2d6.source_diplotype.as_deref(), Some("*2/*10"));
+        // The outside phenotype override (Intermediate Metabolizer) replaces the internal call.
+        assert!(
+            cyp2d6.source_diplotypes.iter().all(|diplotype| diplotype
+                .phenotypes
+                .iter()
+                .any(|p| p == "Intermediate Metabolizer")),
+            "all CYP2D6 source diplotypes should carry the overridden Intermediate Metabolizer phenotype"
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_outside_call_activity_score_like_java_pipeline_test() {
+        // CYP2D6 outside call with only an activity score (1.25) → Normal Metabolizer (1.25).
+        let run = run_cyp2c19_reference_with_outside_pipeline(
+            "pipeline-outside-activity-score",
+            "CYP2D6\t\t\t1.25\n",
+        );
+
+        let cyp2c19 = run.context.gene_report("CYP2C19").expect("CYP2C19 report");
+        assert_eq!(cyp2c19.source_diplotype.as_deref(), Some("*38/*38"));
+
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2D6"),
+            "CYP2D6 should not be called by the matcher"
+        );
+        let cyp2d6 = run.context.gene_report("CYP2D6").expect("CYP2D6 report");
+        assert!(cyp2d6.outside_call);
+        assert_eq!(
+            cyp2d6.source_diplotype.as_deref(),
+            Some("Normal Metabolizer (1.25)")
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_outside_single_position_calls_like_java_pipeline_test() {
+        // CYP2C9 from VCF; IFNL3 (single-position) and CYP4F2 (named-allele) via outside calls.
+        let run = run_hlab_outside_pipeline(
+            "pipeline-outside-single-pos",
+            &[],
+            "IFNL3\trs12979860 reference (C)/rs12979860 reference (C)\nCYP4F2\t*1/*3\n",
+        );
+
+        assert!(
+            run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C9"),
+            "CYP2C9 should be called by the matcher"
+        );
+        for gene in ["IFNL3", "CYP4F2"] {
+            assert!(
+                !run.gene_call_results
+                    .iter()
+                    .any(|result| result.gene == gene),
+                "{gene} should not be called by the matcher"
+            );
+            assert!(
+                run.context
+                    .gene_report(gene)
+                    .is_some_and(|report| report.outside_call),
+                "{gene} should be an outside-call report"
+            );
+        }
+        assert_eq!(
+            run.context
+                .gene_report("IFNL3")
+                .and_then(|report| report.source_diplotype.clone())
+                .as_deref(),
+            Some("rs12979860 reference (C)/rs12979860 reference (C)")
+        );
+        assert_eq!(
+            run.context
+                .gene_report("CYP4F2")
+                .and_then(|report| report.source_diplotype.clone())
+                .as_deref(),
+            Some("*1/*3")
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_outside_call_diplotype_normalization_like_java_pipeline_test() {
+        // Outside CYP2C19 diplotype in reverse order should normalize to *1/*2.
+        let run = run_hlab_outside_pipeline("pipeline-outside-normalize", &[], "CYP2C19\t*2/*1\n");
+
+        assert!(
+            !run.gene_call_results
+                .iter()
+                .any(|result| result.gene == "CYP2C19"),
+            "CYP2C19 should not be called by the matcher"
+        );
+        let cyp2c19 = run.context.gene_report("CYP2C19").expect("CYP2C19 report");
+        assert!(cyp2c19.outside_call);
+        assert_eq!(cyp2c19.source_diplotype.as_deref(), Some("*1/*2"));
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp2c9_s2_s3_unphased_like_java_pipeline_test() {
+        // Unphased core of phaseSetCyp2C9: rs1799853 C/T (*2) + rs1057910 A/C (*3) -> *2/*3.
+        let run = run_single_gene_unphased_pipeline(
+            CYP2C9_DEFINITION_PATH,
+            "pipeline-cyp2c9-s2-s3",
+            &[("rs1799853", "T", "0/1"), ("rs1057910", "C", "0/1")],
+            &[],
+        );
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "CYP2C9")
+            .expect("CYP2C9 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected CYP2C9 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*2/*3"]
+        );
+        let cyp2c9 = run.context.gene_report("CYP2C9").expect("CYP2C9 report");
+        assert_eq!(cyp2c9.source_diplotype.as_deref(), Some("*2/*3"));
+        assert_eq!(
+            cyp2c9
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*2/*3"]
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_diplotype_override_recommendation_like_java_pipeline_test() {
+        // CYP2C9 *2/*2: phenytoin DPWG has both a poor-metabolizer rec and a *2/*2-specific rec;
+        // the diplotype-specific recommendation overrides, leaving exactly one matched annotation.
+        let run = run_single_gene_unphased_pipeline(
+            CYP2C9_DEFINITION_PATH,
+            "pipeline-diplotype-override",
+            &[("rs1799853", "T", "1/1")],
+            &[],
+        );
+
+        let cyp2c9 = run.context.gene_report("CYP2C9").expect("CYP2C9 report");
+        assert_eq!(cyp2c9.source_diplotype.as_deref(), Some("*2/*2"));
+        assert_eq!(
+            cyp2c9
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*2/*2"]
+        );
+        assert_matched_from_source(
+            &run.context,
+            "phenytoin",
+            PrescribingGuidanceSource::DpwgGuideline,
+            1,
+        );
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_cyp3a4_star8_like_java_pipeline_test() {
+        let run = run_single_gene_unphased_pipeline(
+            CYP3A4_DEFINITION_PATH,
+            "pipeline-cyp3a4-star8",
+            &[("rs72552799", "T", "1/1")],
+            &[],
+        );
+
+        let cyp3a4 = run.context.gene_report("CYP3A4").expect("CYP3A4 report");
+        assert_eq!(cyp3a4.source_diplotype.as_deref(), Some("*8/*8"));
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "CYP3A4")
+            .expect("CYP3A4 matcher result");
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected CYP3A4 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*8/*8"]
+        );
+        // quetiapine is a CYP3A4-only DPWG lookup.
+        assert_eq!(matched_annotation_count(&run.context, "quetiapine"), 1);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ifnl3_reference_like_java_pipeline_test() {
+        let run = run_single_gene_unphased_pipeline(
+            IFNL3_DEFINITION_PATH,
+            "pipeline-ifnl3-reference",
+            &[],
+            &[],
+        );
+
+        let ifnl3 = run.context.gene_report("IFNL3").expect("IFNL3 report");
+        assert_eq!(
+            ifnl3.source_diplotype.as_deref(),
+            Some("rs12979860 reference (C)/rs12979860 reference (C)")
+        );
+        assert_eq!(
+            matched_annotation_count(&run.context, "peginterferon alfa-2a"),
+            0
+        );
+        assert_eq!(
+            matched_annotation_count(&run.context, "peginterferon alfa-2b"),
+            0
+        );
+    }
+
+    fn run_ugt1a1_phased_pipeline(
+        name: &str,
+        overrides: &[(&str, &str, &str)],
+    ) -> ReporterPipelineRun {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows_with_default_genotype(
+            &mut vcf,
+            &definition,
+            overrides,
+            &[],
+            "0|0",
+        );
+        let vcf_file = write_temp_named_file(&format!("{name}.vcf"), &vcf);
+
+        run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 phased pipeline run")
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1s60s80s6_phased_not_called_like_java_pipeline_test() {
+        // Phased hap1 = *80 (T) + *27 (rs35350960 A); no single named allele describes the pair with
+        // combinations disabled, so UGT1A1 is not called but the report stays phased.
+        let run = run_ugt1a1_phased_pipeline(
+            "pipeline-ugt1a1-s1s60s80s6-phased",
+            &[("rs887829", "T", "1|0"), ("rs35350960", "A", "1|0")],
+        );
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(
+            matches!(result.kind, GeneCallKind::NoCall),
+            "expected UGT1A1 matcher no-call, got {:?}",
+            result.kind
+        );
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("Unknown/Unknown"));
+        assert!(ugt1a1.phased);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1s60s80s28s6_phased_not_called_like_java_pipeline_test() {
+        // Phased hap1 = *80 (T) + *28 (CATAT) + *27 (A); no single named allele describes that trio.
+        let run = run_ugt1a1_phased_pipeline(
+            "pipeline-ugt1a1-s1s60s80s28s6-phased",
+            &[
+                ("rs887829", "T", "1|0"),
+                ("rs3064744", "CATAT", "1|0"),
+                ("rs35350960", "A", "1|0"),
+            ],
+        );
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(
+            matches!(result.kind, GeneCallKind::NoCall),
+            "expected UGT1A1 matcher no-call, got {:?}",
+            result.kind
+        );
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("Unknown/Unknown"));
+        assert!(ugt1a1.phased);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s1_s80_s37_phased_like_java_pipeline_test() {
+        // Phased hap1 = *80 (T) + *37 (TA(9) = CATATAT); *80+*37 is a named allele, hap2 = *1.
+        let run = run_ugt1a1_phased_pipeline(
+            "pipeline-ugt1a1-s1-s80-s37-phased",
+            &[("rs887829", "T", "1|0"), ("rs3064744", "CATATAT", "1|0")],
+        );
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*1/*80+*37"]
+        );
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*1/*80+*37"));
+        assert!(ugt1a1.phased);
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*1"), Some("*80+*37")]);
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_missing_unphased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        // Unphased twin of the missing-phased case: rs3064744 missing leaves *80/*80+*28/*80+*37.
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[("rs887829", "T", "0/1"), ("rs4148323", "A", "0/1")],
+            &["rs3064744"],
+        );
+        let vcf_file =
+            write_temp_named_file("pipeline-ugt1a1-s6-s80-s28-missing-unphased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*80 missing unphased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(!result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(
+            ugt1a1
+                .source_diplotypes
+                .iter()
+                .map(|diplotype| diplotype.label.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80", "*6/*80+*28", "*6/*80+*37"]
+        );
+        let recommendation_labels = ugt1a1
+            .recommendation_diplotypes
+            .iter()
+            .map(|diplotype| diplotype.label.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["*6/*80", "*6/*80+*28", "*6/*80+*37"] {
+            assert!(
+                recommendation_labels.contains(&expected),
+                "missing recommendation {expected} in {recommendation_labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_reporter_from_vcf_ugt1a1_s6_s80_s28_unphased_like_java_pipeline_test() {
+        let definition =
+            read_definition_file(Path::new(UGT1A1_DEFINITION_PATH)).expect("UGT1A1 definition");
+        let definitions = DefinitionReader::from_definitions(
+            [(definition.gene_symbol.clone(), definition.clone())]
+                .into_iter()
+                .collect(),
+        );
+        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
+        let guidance =
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+
+        let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
+        append_definition_vcf_rows(
+            &mut vcf,
+            &definition,
+            &[
+                ("rs887829", "T", "0/1"),
+                ("rs3064744", "CATAT", "0/1"),
+                ("rs4148323", "A", "0/1"),
+            ],
+            &[],
+        );
+        let vcf_file = write_temp_named_file("pipeline-ugt1a1-s6-s80-s28-unphased.vcf", &vcf);
+
+        let run = run_reporter_from_vcf(
+            &vcf_file,
+            Some("PharmCAT"),
+            &definitions,
+            &phenotypes,
+            &guidance,
+            None,
+            &ReporterPipelineOptions {
+                include_combinations: false,
+                html: HtmlReportOptions {
+                    compact: true,
+                    ..HtmlReportOptions::default()
+                },
+                ..ReporterPipelineOptions::default()
+            },
+        )
+        .expect("UGT1A1 *6/*80+*28 unphased pipeline run");
+
+        let result = run
+            .gene_call_results
+            .iter()
+            .find(|result| result.gene == "UGT1A1")
+            .expect("UGT1A1 matcher result");
+        assert!(!result.match_data.phased);
+        let GeneCallKind::Diplotypes(diplotypes) = &result.kind else {
+            panic!("expected UGT1A1 diplotype call, got {:?}", result.kind);
+        };
+        assert_eq!(
+            diplotypes
+                .iter()
+                .map(|diplotype| diplotype.name.as_str())
+                .collect::<Vec<_>>(),
+            ["*6/*80+*28"]
+        );
+
+        let ugt1a1 = run.context.gene_report("UGT1A1").expect("UGT1A1 report");
+        assert_eq!(ugt1a1.source_diplotype.as_deref(), Some("*6/*80+*28"));
+        let recommendation = &ugt1a1.recommendation_diplotypes[0];
+        let mut alleles = [
+            recommendation.allele1.as_ref().map(|h| h.name.as_str()),
+            recommendation.allele2.as_ref().map(|h| h.name.as_str()),
+        ];
+        alleles.sort();
+        assert_eq!(alleles, [Some("*6"), Some("*80+*28")]);
     }
 
     #[test]

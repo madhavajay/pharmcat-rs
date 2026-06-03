@@ -918,7 +918,7 @@ fn split_outside_diplotype(
                 "Cannot specify two genotypes [{diplotype_text}] for single chromosome gene {gene}"
             )));
         }
-        let alleles = diplotype_text
+        let mut alleles = diplotype_text
             .split('/')
             .map(str::to_owned)
             .collect::<Vec<_>>();
@@ -928,6 +928,9 @@ fn split_outside_diplotype(
                 alleles.len()
             )));
         }
+        // Java OutsideCall stores haplotypes in a TreeSet ordered by HaplotypeNameComparator, so an
+        // unordered outside diplotype (e.g. *2/*1) normalizes to its ordered form (*1/*2).
+        alleles.sort_by(|left, right| crate::matcher::compare_haplotype_names(left, right));
         Ok(alleles)
     } else if !is_single_ploidy_gene(gene) && !is_phenotype_only_gene(gene) {
         Err(OutsideCallError::Invalid(format!(
