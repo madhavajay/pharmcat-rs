@@ -2,16 +2,180 @@
 
 Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving behavior until the Rust implementation is byte-for-byte identical for covered inputs and outputs.
 
+## Current Handoff
+
+- Date: 2026-06-03.
+- Branch/worktree: local `pharmcat-rs` workspace with reference repos under `repos/`.
+- Reference commits:
+  - `repos/PharmCAT`: `55e3cb30a078537b4bec63b8d2b5035a20bc2fc0` on `development`.
+  - `repos/noodles`: `5868f00a1f4fa6a0e0c32b685819fd3ef67b6473` on `madhava/bioscript`.
+  - `repos/pgkb-common`: `70756e19aef8b46c63f4757f874c9c5ed31e3908` on `main`.
+- Rust gate run locally:
+  - `cargo fmt --all --check` passed.
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` passed.
+  - `cargo test -p pharmcat report_context_from_gene_call_results -- --nocapture` passed: 2 passed, 0 failed, 203 filtered out, finished in 20.47s.
+  - `cargo test -p pharmcat report_gene_from_ -- --nocapture` passed: 13 passed, 0 failed, 192 filtered out, finished in 22.20s.
+  - `cargo test -p pharmcat run_reporter_from_vcf -- --nocapture` passed: 4 passed, 0 failed, 205 filtered out, finished in 57.75s.
+  - `cargo test -p pharmcat pipeline::tests -- --nocapture` passed: 28 passed, 0 failed, 199 filtered out, finished in 91.61s.
+  - `cargo test -p pharmcat definition_aware_vcf_ref_mismatch_warnings_match_java_named_allele_matcher -- --nocapture` passed: 1 passed, 0 failed, 227 filtered out, finished in 0.10s.
+  - `cargo test -p pharmcat pipeline::tests -- --nocapture` passed after the definition-aware VCF adapter change: 28 passed, 0 failed, 200 filtered out, finished in 96.90s.
+  - `cargo test -p pharmcat cyp2d6_sort_exception_fixture_produces_many_diplotypes_like_java_named_allele_matcher -- --nocapture` passed: 1 passed, 0 failed, 228 filtered out, finished in 3.14s.
+  - `cargo test -p pharmcat definition_aware_vcf_ref_mismatch_warnings_match_java_named_allele_matcher -- --nocapture` passed after the ALT-validation adapter change: 1 passed, 0 failed, 228 filtered out, finished in 0.08s.
+  - `cargo test -p pharmcat vcf::tests -- --nocapture` passed: 20 passed, 0 failed, 209 filtered out, finished in 0.00s.
+  - `cargo test -p pharmcat pipeline::tests -- --nocapture` passed after the CYP2D6 sort fixture work: 28 passed, 0 failed, 201 filtered out, finished in 90.44s.
+  - `cargo test -p pharmcat partial_reference_ -- --nocapture` passed: 4 passed, 0 failed, 228 filtered out, finished in 0.34s.
+  - `cargo test -p pharmcat matcher::tests -- --nocapture` passed: 47 passed, 0 failed, 185 filtered out, finished in 29.69s.
+  - `cargo test -p pharmcat accepts_ft_format_number_unknown_like_java_vcf_reader -- --nocapture` passed: 1 passed, 0 failed, 233 filtered out, finished in 0.00s.
+  - `cargo test -p pharmcat unknown_alt_multisample_selected_sample_has_no_warnings_like_java_named_allele_matcher -- --nocapture` passed: 1 passed, 0 failed, 233 filtered out, finished in 0.04s.
+  - `cargo test -p pharmcat vcf::tests -- --nocapture` passed: 21 passed, 0 failed, 213 filtered out, finished in 0.00s.
+  - `cargo test -p pharmcat matcher::tests -- --nocapture` passed after the unknown-ALT multisample fixture work: 48 passed, 0 failed, 186 filtered out, finished in 13.59s.
+  - `cargo test -p pharmcat dpyd_hap_b3 -- --nocapture` passed: 10 passed, 0 failed, 206 filtered out, finished in 7.12s.
+  - `timeout 750s cargo test -p pharmcat --all-features` passed: 211 passed, 0 failed, 0 ignored, finished in 455.58s.
+- Java reference gate attempted locally:
+  - `timeout 900s ./gradlew test` failed because the sandbox could not create the Gradle wrapper lock in `~/.gradle`.
+  - `GRADLE_USER_HOME="$PWD/../../.gradle-home" timeout 900s ./gradlew test` advanced to wrapper download, then failed with `java.net.UnknownHostException: services.gradle.org`.
+  - Status: Java test baseline is blocked in this environment until network access is available or an offline Gradle 9.0.0 distribution/cache is supplied.
+- Implementation note from this batch:
+  - `GenePhenotype.diplotypes` is a `Vec` rather than a `BTreeSet` because lookup code only iterates it, and loading large Java phenotype JSONs such as RYR1 should not sort tens of thousands of records during deserialization.
+  - RYR1 lowest-function unit tests use a minimal Java-derived phenotype helper for the asserted haplotypes; full Java phenotype-directory loading remains covered by `loads_phenotype_map_directory_like_java_phenotype_map`.
+  - Java `DiplotypeFactory.makeComponentDiplotypes` behavior is now represented for lowest-function true diplotype calls: Rust collects component haplotypes from both sides of each `DiplotypeMatch`, expands combination labels, and serializes them as `matcherComponentHaplotypes` `ReportDiplotype` objects. Real DPYD and RYR1 report tests assert non-empty component diplotype JSON.
+  - Lowest-function DPYD/RYR1 report construction now has definition-aware wrappers that apply matcher variant reports plus Java-style allele-definition and phenotype version/source metadata from real `DefinitionFile` / `GenePhenotype` inputs. Real DPYD and RYR1 report tests assert `alleleDefinitionVersion`, `alleleDefinitionSource`, `phenotypeVersion`, and normalized definition-backed source diplotype labels.
+  - `ReportGene::from_gene_call_result_with_definition` now dispatches Java matcher results through the special DPYD/RYR1 lowest-function report constructors instead of the standard matcher constructor, while other genes continue to use the standard path. The lowest-function definition path now also adds the Java-style reference-allele note. Real DPYD and RYR1 report tests assert `chr`, phasing/effective phasing, full matcher `variantReports`, and reference-allele messages.
+  - `ReportContext::from_gene_call_results_with_definitions` now converts a batch of matcher `GeneCallResult`s plus `DefinitionReader`/`PhenotypeMap` into a report context using the gene-specific dispatcher. Mixed real CYP3A5/DPYD/RYR1 tests assert standard and lowest-function report paths survive context construction; missing definitions now fail loudly instead of silently dropping matcher results.
+  - `run_reporter_from_vcf` now performs the first Rust VCF-to-reporter pipeline slice: it reads sample allele calls from VCF, runs each loaded definition through the correct matcher, builds a `ReportContext`, and writes reporter JSON/HTML/TSV outputs through the existing report writers. A real CYP3A5 VCF fixture test asserts context construction plus all three output files; a missing-sample test asserts VCF errors surface through the pipeline helper.
+  - VCF warnings collected by `run_reporter_from_vcf` are now attached to generated `ReportGene.variantReports` before `ReportContext` construction. A temp VCF over a real CYP3A5 definition position asserts Java-style `Ignoring: no call (./.)` warning propagation into the matching `VariantReport`.
+  - `run_reporter_from_vcf` now has a multi-gene VCF/definition fixture test that runs standard CYP3A5 plus lowest-function DPYD and RYR1 in one helper call. The test starts from the Java CYP3A5 haplotyper VCF fixture, appends definition-derived DPYD/RYR1 rows, asserts DPYD/RYR1 routing and report labels/lookup keys, and verifies a Java-style RYR1 no-call warning propagates into the matching report variant.
+  - `run_cli_config` now wires parsed CLI config and Java-style output plans into the ported VCF-to-reporter helper for the full `-vcf` matcher + phenotyper + reporter path. The binary uses this path with `PHARMCAT_RESOURCE_DIR` or the local `repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat` fallback. A CLI pipeline test copies the Java CYP3A5 haplotyper definition into a temporary `*_translation.json` directory, runs parsed `-vcf/-def/-o/-bf/-reporter*` args, and asserts reporter HTML/JSON/TSV files are written with the expected CYP3A5 report.
+  - The full `-vcf` CLI path now writes matcher JSON, matcher warnings text, optional matcher HTML, and phenotyper JSON intermediates in addition to reporter outputs. The matcher JSON/HTML are deterministic Rust-owned parity surfaces built from `GeneCallResult`s until Java byte-for-byte matcher rendering is ported; phenotyper JSON uses the same `ReportContext` JSON writer that feeds reporter output. The CLI pipeline test now requests `-matcherHtml` and asserts all intermediate files are produced with CYP3A5 `*1/*2` data.
+  - Matcher JSON now uses more Java `ResultSerializer` field shape for the Rust CLI path: metadata has `genomeBuild` and `sampleId`, top-level `vcfWarnings` is present, diplotype calls populate Java-style `haplotypes`, lowest-function fallback calls serialize as `haplotypeMatches`, and gene calls include `variants`, `variantsOfInterest`, and `uncallableHaplotypes`. The CLI CYP3A5 test parses matcher JSON and asserts these Java-compatible keys.
+  - Matcher warning JSON now serializes Java-style `MessageAnnotation` objects instead of Rust debug strings. Gene-call warnings use `rule_name`/`version`/`matches`/`exception_type`/`message`, DPYD HapB3 static warnings use the Java rule names and bundled message text, and the temporary Rust-only `dpydHapB3Warnings` field is no longer emitted. Pipeline tests assert warning object shape and the CLI matcher JSON field surface.
+  - Matcher `matchData` JSON now follows Java exposed fields more closely: it emits `treatUndocumentedVariationsAsReference`, `phased`, Java-style `phaseSets` and `posToPhaseSet` maps, `homozygous`, `effectivelyPhased`, and missing-position lists, while dropping the Rust-only `haploid` field. A focused pipeline test covers Java null-phase-set handling with `Integer.MIN_VALUE`, and the CLI CYP3A5 matcher JSON test asserts the field surface.
+  - Matcher `NamedAllele` JSON now follows Java exposed fields more closely: it emits `name`, `id`, `alleles`, `cpicAlleles`, `reference`, `structuralVariant`, `corePositions`, `score`, `numCombinations`, and `numPartials`, while dropping Rust-only matcher/definition internals such as `populationFrequency`, missing-position state, and score overrides. Focused and CLI pipeline tests assert the exposed-field surface.
+  - Matcher `uncallableHaplotypes` now follows Java `ResultBuilder.initGeneCall`: it is derived as definition haplotype names minus marshalled `MatchData` haplotype names, instead of always serializing an empty list. A focused pipeline test builds a missing-position CYP3A5 fixture and asserts the Java set-difference behavior. `VariantLocus` serializer audit found the current Rust field list already matches Java `@Expose` fields.
+  - Matcher metadata now follows Java `Metadata` more closely: `sampleId` is derived from the selected VCF sample instead of the output basename/title, `timestamp` is emitted as an ISO-8601 instant string, and `sampleProps` is emitted as `null` when no sample metadata file has been ingested. Pipeline tests assert timestamp shape, epoch formatting, and the CYP3A5 CLI sample ID.
+  - DPYD HapB3 allele-count matcher warnings now preserve Java's dynamic `warn.alleleCount` payload: Rust threads the observed allele count and locus rsid through `DpydHapB3Warning::AlleleCount`, and matcher JSON renders `Only found <count> allele for <rsid>` instead of a generic placeholder. Focused DPYD matcher and pipeline warning JSON tests cover the change.
+  - Matcher metadata now ingests Java triplet-style sample metadata TSV files for `sampleProps` when `-sm/--sample-metadata` is provided. Rust reads rows as `sampleId<TAB>key<TAB>value`, keeps matching sample rows in the matcher JSON metadata object, and leaves `sampleProps` as `null` when no metadata or no matching sample is present. Focused metadata parser and CLI CYP3A5 tests cover the behavior.
+  - Matcher HTML now uses the Java `ResultSerializer`/`template.html` shell instead of the temporary two-column table: Rust emits the Bootstrap navbar/footer/title shape, Java short-date footer timestamp, per-gene `<h3>` sections, diplotype score lists, Java table classes/header rows, phase-set rows, VCF call highlighting, matched haplotype rows, sequence rows, and missing-position/uncallable-haplotype notes from the current Rust matcher data surface. The CLI CYP3A5 test asserts the Java template landmarks.
+  - Matcher HTML now retains VCF REF/ALT allele lists on matcher `SampleAllele`s and renders the Java `VCF REF,ALTs` table row from `SampleAllele.getVcfAlleles()` semantics. The CLI CYP3A5 matcher HTML test asserts the `C,T` row from the Java haplotyper fixture.
+  - Matcher HTML now follows two more Java `ResultSerializer` branches: when no haplotypes are matched, Rust renders matchable haplotypes as `table-danger` unmatched rows; when called haplotypes carry missing tag positions, Rust emits the Java "called even though tag positions were missing" note with missing HGVS names. Focused matcher HTML tests cover both branches.
+  - Matcher HTML now reuses the same Java dynamic `MessageAnnotation` text builder as matcher JSON for rendered warning paragraphs, fixing the missing-required-position HTML copy to match Java `Cannot call <gene> - missing required variant(s) (...)`. Rust also has an internal `always_show_unmatched_haplotypes` renderer option matching Java `ResultSerializer.alwaysShowUnmatchedHaplotypes(true)` semantics while the CLI default remains Java-compatible. Focused matcher HTML tests cover both paths.
+  - Matcher HTML now embeds a Java `haplotype/template.html`-shaped shell and uses Java-style `${title}`/`${content}`/`${timestamp}` substitution, including the CSS/comment whitespace and final `PrintWriter.println` newline shape. A focused template-shell test pins the byte-level outer layout while the full CLI CYP3A5 test continues to exercise end-to-end matcher HTML output.
+  - Matcher HTML haplotype/sequence rows now follow Java `ResultSerializer.printAllele` cell emission: Rust iterates only the sorted `position:allele` entries in the allele pattern/sequence instead of adding blank alignment cells for table positions absent from that row. A focused sparse-row test pins the Java row shape and highlighting/bolding behavior.
+  - Matcher HTML `printAllele`-equivalent rows now preserve Java raw row label and allele-cell text behavior instead of HTML-escaping haplotype names or allele strings inside those rows. A focused raw-output test covers names/calls containing `<`, while broader matcher HTML text surfaces remain separately audited.
+  - Matcher HTML haplotype rows now render Java `NamedAllele.getPermutations().pattern()`-style cells: missing allele slots emit `.*?`, one-letter IUPAC codes expand to Java regex text such as `[AG]`/`del`, repeat-wobble values split on Java's `" or "` delimiter into `(a|b)` groups, and row rendering strips backslashes at the same late `printAllele` stage. Focused matcher HTML tests cover the helper output and final row byte shape.
+  - Java test inventory now has an initial `docs/test-status.md` owner/status table. The current inventory records 63 Java `*Test.java` files, 62 files with JUnit test annotations, and 426 `@Test` / `@ParameterizedTest` annotations; `SyntheticBatchTest.java` is tracked separately as a generator utility. The table is intentionally conservative and marks broad Rust owner modules without claiming method-level parity.
+  - `docs/test-status.md` now expands `haplotype/NamedAlleleMatcherTest` into a 42-method table with Java method names, source lines, fixture/focus notes, closest Rust owner tests, conservative coverage status, and next actions. This identifies direct Rust coverage for the core CYP3A5 and combination fixtures, plus concrete unmapped fixture gaps such as `sortException`, reference-mismatch warnings, partial-reference fixtures, and CYP2B6/NAT2 synthetic builder cases.
+  - Definition-aware VCF allele extraction now mirrors Java `VcfReader` for loaded PharmCAT locations: rows outside the loaded definitions are ignored, rows whose VCF REF differs from the definition REF are discarded, and Java-style warnings are recorded. `testMismatchedRefAlleleWarnings` is covered by a Rust fixture test using `NamedAlleleMatcher-mismatchedRefAllele.*`, and `run_reporter_from_vcf` now uses the same adapter.
+  - Java `NamedAlleleMatcherTest.sortException` is now covered by a Rust fixture test over `NamedAlleleMatcher-sortError.vcf` and the main PharmCAT definitions. The slice also made CYP2D6 definition loading accept Java's `corePositions: null`, made combination allele merging tolerate concrete bases covered by IUPAC wobble alleles, and added definition-aware undocumented-ALT warnings so the fixture reaches Java's 34-warning multimap size and at least 10 CYP2D6 diplotypes.
+  - Java `NamedAlleleMatcherTest` partial-reference fixtures are now covered for CYP2B6: unphased, phased, and double-reference partial cases assert the Java diplotype names, warning counts, and Java-style `NamedAllele.isCombination()` / `isPartial()` split. Rust `NamedAllele` now exposes those Java-equivalent helpers derived from `numCombinations` and `numPartials`.
+  - Java `NamedAlleleMatcherTest.testUnknownAltMultisample` is now covered by a Rust matcher fixture selecting `Sample_2` from `NamedAlleleMatcher-unknownAltMultisample.vcf` and asserting zero VCF warnings. The VCF adapter also has a focused regression for accepting PharmCAT fixture headers with `FORMAT/FT Number=.` like Java's VCF reader.
+  - Java `NamedAlleleMatcherTest.testDiplotypeMatcher` is now covered by a Rust DPYD fixture test over `NamedAlleleMatcher-diplotypeMatcher.vcf`, looping the call ten times like Java and rejecting no-call regressions. The DPYD lowest-function fallback now keeps the full definition and skips HapB3 augmentation when no HapB3 variants are present, matching Java's no-effect HapB3 path for this fixture.
+  - Java `NamedAlleleMatcherTest.testDpydEffectivelyPhased` and `testDpydEffectivelyPhased2` are now covered by Rust DPYD generated-fixture equivalents for `Reference/c.62G>A` and the multi-component `[c.85T>C (*9A) + c.1218G>A + c.1627A>G (*5)]/[c.1218G>A + c.1627A>G (*5)]` case. `MatchData::marshall_haplotypes` now retains available core positions instead of clearing them, so combination partial suppression matches Java when named components explain variant positions.
+  - Java `NamedAlleleMatcherTest.testDpydPhased` is now covered by a Rust DPYD generated-fixture equivalent for phased `c.62G>A` plus `c.3067C>A`, asserting Java's `Reference/[c.62G>A + c.3067C>A]` diplotype and haplotype names.
+  - Java `NamedAlleleMatcherTest.testDpydUnPhased` is now covered by a Rust DPYD generated-fixture equivalent for unphased `c.62G>A` plus `c.3067C>A`, asserting Java's haplotype fallback names `c.62G>A` and `c.3067C>A`.
+  - Java `NamedAlleleMatcherTest.testDpydPhasedDouble` is now covered by a Rust DPYD generated-fixture equivalent for phased homozygous `c.62G>A`/`c.3067C>A` plus heterozygous HapB3, asserting Java's two combination haplotype labels and combined diplotype.
+  - Java `NamedAlleleMatcherTest.testDpydHomozygous` is now covered by a Rust DPYD generated-fixture equivalent for phased homozygous `c.62G>A` plus `c.3067C>A`, asserting Java's repeated combination diplotype and single haplotype label.
+  - Java `NamedAlleleMatcherTest.testDpydEffectivelyPhasedCombination` is now covered by a Rust DPYD generated-fixture equivalent for the NA18973-inspired missing-position case, asserting Java's `c.1627A>G (*5)/[c.85T>C (*9A) + c.1627A>G (*5)]` diplotype and haplotype labels.
+  - Java `NamedAlleleMatcherTest.testDpydUnphasedHomozygousNoFunction` is now covered by a Rust DPYD generated-fixture equivalent for unphased no-function fallback, asserting Java's haplotype-match labels `c.2582A>G`, `c.2846A>T`, and two `c.2933A>G` entries. Lowest-function homozygous fallback now resolves combination component IDs to display names only for this fallback path.
+  - Java `NamedAlleleMatcherTest.testPermutationGeneration` is now covered by a Rust CYP2C19 generated-fixture equivalent for all-phased, all-unphased, and mixed-phased `*2/*17` calls over the default CYP2C19 translation definition.
+  - Java `NamedAlleleMatcherTest.testPartialMissingAllele_combination1` is now covered by a Rust CYP2B6 generated-fixture equivalent that starts from full reference rows like `TestVcfBuilder`, overrides `rs8192709` to `T/.`, and asserts Java's single `*2/g.40991369?` combination fallback diplotype.
+  - Java `NamedAlleleMatcherTest.testPartialMissingAllele_combination_phased` is now covered by a Rust CYP2B6 generated-fixture equivalent that mirrors `TestVcfBuilder.phased()`, overrides `rs8192709` to `./T`, and asserts Java's single `*2/g.40991369?` combination fallback diplotype.
+  - Java `NamedAlleleMatcherTest.unphasedPrioritySameScore` is now covered by a Rust NAT2 generated-fixture equivalent over the default NAT2 definition and exemptions, asserting Java's no-exemption `*6/*40` plus `*7/*34` calls and default-exemption `*7/*34` pick with an `unphased-priority` warning.
+  - Java `NamedAlleleMatcherTest.unphasedPriorityDifferentScore` is now covered by a Rust NAT2 generated-fixture equivalent over the default NAT2 definition and exemptions, asserting Java's no-exemption `*1/*6` plus `*4/*34` calls and default-exemption `*1/*6` pick with an `unphased-priority` warning. The Java method's save-results call remains tracked for later Java-vs-Rust matcher JSON/HTML fixture promotion.
+  - Java `NamedAlleleMatcherTest.requiredPosition` is now covered by a Rust NAT2 generated-fixture equivalent over the default NAT2 definition and exemptions, asserting Java's no-exemption `*1/*1` call and default-exemption no-call with `missing-required-position` for `chr8:18400194`. The Java method's save-results call remains tracked for later Java-vs-Rust matcher JSON/HTML fixture promotion.
+  - Java `NamedAlleleMatcherTest.testNat2Combination` is now covered by a Rust NAT2 generated-fixture equivalent over the default NAT2 definition, asserting Java's phased combination diplotypes `*1/[*15 + *44]` and `*1/[*36 + *46]`. The Java method's matcher/report HTML side effects remain tracked for later Java-vs-Rust fixture promotion.
+  - Java `NamedAlleleMatcherTest.testWobbleScoringWithMultipleSequenceMatches` is now covered by a Rust CYP2B6 generated-fixture equivalent over the default CYP2B6 definition, asserting Java keeps both top wobble-scored calls `*6/*18` and `*9/*18`.
+  - `docs/test-status.md` now expands Java `PipelineTest` into an 81-method table with line numbers, fixture/focus notes, closest Rust coverage, conservative status, and concrete next actions.
+  - Java `PipelineTest.testNoData` is now covered by a Rust header-only VCF pipeline fixture over the real CYP3A5 resources, asserting no VCF warnings, Java no-data semantics (all matcher variants missing), and reporter JSON/HTML/TSV output with `Unknown/Unknown` and `No data provided`.
+  - Java `PipelineTest.testUndocumentedVariation` is now covered by a Rust CYP2C19 pipeline fixture that generates full definition-backed VCF rows, injects the undocumented `rs3758581` `T` allele, keeps combination matching disabled like Java's fixture wrapper, and asserts the VCF warning, `Unknown/Unknown` source diplotype, undocumented-variation flags, compact HTML no-call state, and reporter JSON output.
+  - Java `PipelineTest.testUndocumentedVariationExtendedReport` is now covered by the paired Rust CYP2C19 undocumented-variation pipeline fixture with compact reporting disabled, asserting the same no-call reporter state plus extended Section II no-call drug rows instead of compact `No recommendations` output.
+  - Java `PipelineTest.testUndocumentedVariationsWithTreatAsReference` is now covered by a Rust CYP2C19/RYR1/TPMT pipeline fixture that applies Java's toxic-gene undocumented-as-reference rule in the VCF adapter, asserts CYP2C19 remains `Unknown/Unknown`, TPMT remains `*1/*1`, RYR1 remains `Reference/Reference`, and verifies Java warning text plus `gs-undocVarAsRef-*` HTML/report JSON flags.
+  - Java `PipelineTest.testUndocumentedVariationsWithTreatAsReferenceAndCombo` is now covered by a Rust RYR1/TPMT pipeline fixture with combination matching enabled, asserting TPMT keeps the undocumented SNP as Java's `*1/g.18143724C>T` custom call without the treat-as-reference marker while RYR1 still reports `Reference/Reference` with the treat-as-reference marker.
+  - Java `PipelineTest.testUncallable` is now covered by a Rust ABCG2/CYP2C19/TPMT pipeline fixture that mirrors Java's ABCG2 reference rows plus CYP2C19 undocumented variation and TPMT uncallable variants, asserting CYP2C19 and TPMT report `Unknown/Unknown`, render Section III `Not called`, and appear as uncallable in reporter HTML/JSON/TSV.
+  - Java `PipelineTest.testCyp2c19` is now covered by a Rust CYP2C19 pipeline fixture that wires Java phenotyper outside-call TSVs into the full VCF pipeline, asserts CYP2C19 `*1/*1`, outside CYP2D6 `*3/*4`, outside G6PD `B (wildtype)/B (wildtype)`, amitriptyline/citalopram CPIC and DPWG matched annotation counts, ivacaftor no-match behavior, and CLI `-po` acceptance on the full `-vcf` path.
+  - Java `PipelineTest.testCyp2c19_s1s2rs58973490het` is now covered by a Rust CYP2C19 pipeline fixture that loads the real reporter `messages.json`, asserts the `*1/*2` call with heterozygous `rs58973490`, outside CYP2D6 `*3/*4`, Java drug annotation counts for amitriptyline/citalopram/clomipramine/ivacaftor, the matching CYP2C19 ambiguity message, and the CPIC amitriptyline drug message.
+  - Java `PipelineTest.testCyp2c19_s1s2` is now covered by the paired Rust CYP2C19 pipeline fixture that keeps `rs58973490` homozygous/reference, asserts the same `*1/*2` call and drug annotation counts, and verifies both CYP2C19 gene ambiguity messages and CPIC amitriptyline ambiguity drug messages are suppressed.
+  - Java `PipelineTest.testClomipramineCall` is now covered by a Rust CYP2C19 `*2/*2` pipeline fixture with the Java outside-call TSV, asserting the broad matched-annotation counts and source presence for tricyclic antidepressants, clopidogrel, lansoprazole, and voriconazole.
+  - Java `PipelineTest.testCyp2c19noCall` is now covered by a Rust CYP2C19 no-call pipeline fixture with the Java outside-call TSV, asserting the matcher returns `NoCall` rather than an empty diplotype set, reporter output is `Unknown/Unknown`, outside CYP2D6/G6PD calls still load, and citalopram/ivacaftor CPIC and DPWG recommendation matches are suppressed.
+  - Java `PipelineTest.testCyp2c19s4bs17rs28399504missing` is now covered by a Rust CYP2C19 missing-position pipeline fixture that omits `rs28399504` like Java `TestVcfBuilder.missing`, asserts matcher/report calls `*4/*4`, `*4/*17`, and `*17/*17`, verifies the missing-position marker, and pins citalopram's Java CPIC/DPWG/FDA matched annotation counts. The slice also fixed reporter recommendation genotype construction to expand one genotype per recommendation diplotype like Java `Genotype.makeGenotypes`.
+  - Java `PipelineTest.testCyp2c19s1s4het` is now covered by a Rust CYP2C19 `*4/*17` pipeline fixture with the Java CYP2D6 outside-call TSV, asserting the matcher/report CYP2C19 call, the reportable outside CYP2D6 `*1/*4` recommendation diplotype, and the outside-call marker.
+  - Java `PipelineTest.testCyp2c19s1s4missingS1` is now covered by a Rust CYP2C19 partial-missing pipeline fixture that omits `rs3758581` like Java `TestVcfBuilder.missing`, uses the Java CYP2D6 outside-call TSV, asserts matcher/report CYP2C19 `*1/*4` and `*4/*38`, verifies missing and heterozygous variant reports, and pins the two CYP2C19 ambiguity messages plus the two CPIC amitriptyline drug messages. The slice also fixed the VCF-to-reporter pipeline to request Java's default top-candidate matcher mode for standard genes.
+  - Java `PipelineTest.testCyp2c19SingleGeneMatch` is now covered by a Rust CYP2C19 `*1/*38` pipeline fixture that starts from reference CYP2C19 rows, sets `rs3758581` to `A/G`, omits `rs56337013` like Java `TestVcfBuilder.missing`, and asserts the matcher/report CYP2C19 call plus the CYP2D6 outside `*1/*4` recommendation diplotype.
+  - Java `PipelineTest.multipleCalls` is now covered by a Rust CYP2C19 multiple-call pipeline fixture that sets `rs12248560` to `C/T`, sets `rs3758581` to `G/G`, omits `rs28399504` like Java `TestVcfBuilder.missing`, and asserts matcher/report CYP2C19 `*1/*4` and `*1/*17` plus the missing-position report surface.
+  - Java `PipelineTest.testRosuvastatin` is now covered by a Rust ABCG2/SLCO1B1/DPYD pipeline fixture that sets ABCG2 `rs2231142` to `G/T`, sets SLCO1B1 `rs56101265` to `T/C`, loads DPYD without VCF rows, and asserts ABCG2/SLCO1B1 matcher calls, SLCO1B1 `*1/*2`, rosuvastatin's two matched annotations, absence of the capecitabine drug section, and the DPYD no-data HTML marker.
+  - Java `PipelineTest.testSlco1b1HomWild` is now covered by a Rust SLCO1B1 reference pipeline fixture that asserts matcher/source/recommended `*1/*1`, simvastatin's two matched annotations, the DPWG `No recommendation` classification, and reporter HTML markers for SLCO1B1/simvastatin.
+  - Java `PipelineTest.testSlco1b1HomVar` is now covered by a Rust SLCO1B1 `*5/*15` pipeline fixture that sets `rs2306283` to `A/G`, sets `rs4149056` to `C/C`, and asserts matcher/source/recommended `*5/*15`, CPIC and DPWG simvastatin matched annotation counts, and reporter HTML markers for SLCO1B1/simvastatin.
+  - Java `PipelineTest.testSlco1b1Test2` is now covered by a Rust SLCO1B1 `*1/*44` pipeline fixture that sets `rs2306283`, `rs11045852`, and `rs74064213` to `A/G`, and asserts matcher/source/recommended `*1/*44`, simvastatin matched annotation counts, and reporter HTML markers for SLCO1B1/simvastatin.
+  - Java `PipelineTest.testSlco1b1Test3` is now covered by a Rust SLCO1B1 `*1/*15` pipeline fixture that sets `rs2306283` to `A/G` and `rs4149056` to `T/C`, and asserts matcher/source/recommended `*1/*15`, CPIC and DPWG simvastatin matched annotation counts, and reporter HTML markers for SLCO1B1/simvastatin.
+  - Java `PipelineTest.testSlco1b1Test4` is now covered by a Rust SLCO1B1 `*5/*45` pipeline fixture that sets `rs4149056` to `T/C` and `rs71581941` to `C/T`, asserts matcher/source/recommended `*5/*45`, simvastatin CPIC/DPWG/FDA source behavior, and writes matcher/phenotyper/reporter intermediate outputs.
+  - Java `PipelineTest.testSlco1b1Test5` is now covered by a Rust SLCO1B1 `*1/*45` pipeline fixture that sets `rs2306283`, `rs4149056`, and `rs71581941` to heterozygous calls, asserts the `SLCO1B1 *1/*45 warning` gene message, simvastatin CPIC/DPWG/FDA source behavior, and writes matcher/phenotyper/reporter intermediate outputs.
+  - Java `PipelineTest.testSlco1b1UncalledOverride` is now covered by a Rust SLCO1B1 pipeline fixture that reproduces the no-call matcher input, asserts source `Unknown/Unknown`, inferred recommendation `*1/*5`, print-call source `rs4149056 C/rs4149056 T`, and simvastatin CPIC/DPWG/FDA-association matches.
+  - Java `PipelineTest.testUgt1a1Phased` is now covered by a Rust UGT1A1 phased pipeline fixture that sets `rs887829` to `C|T`, asserts matcher/report phased state, matcher/source/recommended `*1/*80`, recommendation alleles `*1` and `*80`, and reporter JSON/HTML diplotype markers.
+  - Java `PipelineTest.testUgt1a1Unphased` is now covered by a Rust UGT1A1 unphased pipeline fixture based on Java's true unphased matcher/phenotyper fixture, setting `rs887829` to `C/T`, asserting matcher/report unphased state, matcher/source/recommended `*1/*80`, recommendation alleles `*1` and `*80`, and reporter JSON/HTML diplotype markers. The Java pipeline method currently calls `.phased()` despite the test name, so this Rust fixture covers the intended unphased path until the Java reference gate can arbitrate.
+  - Java `PipelineTest.testUgt1a1s1s1` is now covered by a Rust UGT1A1 reference pipeline fixture that sets all definition rows to `0/0`, asserts matcher/source/recommended `*1/*1`, recommendation alleles `*1` and `*1`, `Normal Metabolizer` lookup, and reporter JSON/HTML diplotype markers.
+- Next unblocked slice:
+  - Run Java reference tests once Gradle can resolve locally, then record exact Java pass/fail/skip counts.
+  - Port Java `PipelineTest.testUgt1a1S1S80S28`, covering UGT1A1 `*1/*80+*28` combination recommendations.
+  - Promote the first Java-vs-Rust reporter-output comparison for the CLI VCF path once the Java reference gate is available, using the existing CYP3A5 haplotyper fixture as the initial promoted parity case.
+  - Continue tightening matcher HTML toward full Java `ResultSerializer` parity by promoting a Java-vs-Rust matcher HTML fixture comparison once the Java reference gate is available.
+  - Add a small generated-definition VCF fixture utility or shared test helper if more multi-gene pipeline tests need the same definition-to-reference-row setup.
+
 ## Guiding Principles
 
 - [ ] Treat tests as the spec. Every Rust behavior area should trace back to a Java test, Java fixture, or explicit parity fixture.
+- [ ] Mirror Java test names, fixture names, and intent in Rust wherever practical so a failing Rust test can be traced back to the Java source quickly.
 - [ ] Keep the Java source repos read-only references under `repos/`.
 - [ ] Keep the production implementation pure Rust. Do not bind to Java or call the Java jar at runtime.
 - [ ] Use Rust bioinformatics libraries where they cover file-format semantics, especially `noodles-vcf` and `noodles-bgzf`.
+- [ ] Use `noodles` as the default VCF/BGZF implementation, but keep PharmCAT-specific adapters local when Java PharmCAT behavior differs from strict VCF parsing.
 - [ ] Reimplement PharmCAT and the needed `pgkb-common` behavior inside this crate first; split helper crates only after real reuse appears.
 - [ ] Preserve Java-observable behavior first, including quirks or bugs, then make explicit later decisions about whether to fix them.
 - [ ] Document every intentional non-parity decision with the fixture or test that proves the difference is acceptable.
 - [ ] Keep parity work in small slices. Do not mix broad refactors, dependency upgrades, and behavior changes in the same slice.
+- [ ] Do not mark an area complete until its relevant Java tests or parity fixtures pass in Rust.
+
+## Port Patterns Imported From Sibling Rust Ports
+
+- [x] Reviewed sibling Rust-port TODOs and GitHub Actions pipelines in `/Users/madhavajay/dev/biovault-app/workspace1/repos`: `kestrel-rs`, `htslib-rs`, `samtools-rs`, `bcftools-rs`, and `bioscript`.
+- [x] From `kestrel-rs`: split Java-reference and Rust jobs so they run independently in CI; clone reference repos into a stable local directory; treat Java tests as the executable spec; add Java-vs-Rust parity only after a stable CLI/API path exists.
+- [x] From `kestrel-rs`: make the Rust CLI argv-compatible with the Java CLI before broad end-to-end parity; use an env-gated Java parity test (`*_RUN_JAVA_PARITY=1`) so normal unit tests stay fast and deterministic.
+- [x] From `kestrel-rs`: keep CI checkouts submodule-free, then explicitly clone Java/reference repositories into the same local paths developers use. For this port, the canonical CI workspace layout is `repos/PharmCAT`, `repos/noodles`, and `repos/pgkb-common`.
+- [x] From `kestrel-rs`: keep Java reference tests, Rust unit tests, and Java-vs-Rust parity as separate gates. The Java and Rust gates can run in parallel; parity waits until both toolchains and a stable Rust CLI/API exist in the same job.
+- [x] From `kestrel-rs`: when parity is enabled, build or locate the Java reference artifact inside CI and pass it through explicit environment variables instead of relying on developer machine paths.
+- [x] From `kestrel-rs`: add `workflow_dispatch` to long-running reference/parity workflows so expensive or exploratory gates can be rerun manually without manufacturing commits.
+- [x] From `kestrel-rs`: keep a bug/quirk decision table and freeze Java-observable bugs with Rust tests before deciding whether to preserve or fix them.
+- [x] From `kestrel-rs`: defer coverage and rustdoc-as-policy gates until the core API stabilizes, then add them explicitly rather than hiding them inside the basic test job.
+- [x] From `htslib-rs`: keep an API/test coverage map, classify upstream behavior before porting, use Rust libraries first, and treat C/Java only as an oracle in tests rather than a runtime dependency.
+- [x] From `htslib-rs`: classify upstream APIs at item level when a package is broad enough that file-level status becomes misleading.
+- [x] From `htslib-rs`: port upstream tests as acceptance tests, not just inspiration. Each upstream test should have a Rust owner, status, fixture list, and reason if it is intentionally out of scope.
+- [x] From `htslib-rs`: prefer `noodles` for file-format semantics and add small compatibility adapters only where upstream behavior differs from strict parser behavior.
+- [x] From `htslib-rs`: keep the upstream reference-suite job separate from the Rust API job so failures identify whether the oracle is broken or the port is broken.
+- [x] From `samtools-rs`: make parity gates fail loudly when required tools are missing; keep a promoted parity subset separate from exploratory cases; record exact pass/fail/xfail counts and avoid false-green skips.
+- [x] From `samtools-rs`: treat missing external tools as a hard failure, not a skip; install or document tools like `bgzip`, `tabix`, Java, Gradle, Python, and Perl before claiming parity.
+- [x] From `samtools-rs`: keep an authoritative whole-suite count once available, and mark older per-group counts as historical if a stronger gate supersedes them.
+- [x] From `samtools-rs`: add a "current handoff" block during long port batches with branch/commit, exact gates run, pass/fail counts, and the next unblocked task.
+- [x] From `samtools-rs`: keep promoted fast parity gates separate from full upstream suites. Fast gates protect everyday work; full suites are the authority for completion claims.
+- [x] From `samtools-rs`: copy or point the Rust binary into the upstream harness location when that is the least lossy way to run the upstream test suite unchanged.
+- [x] From `bcftools-rs`: cache cargo dependencies in CI; track dependency blockers explicitly; route dependency gaps to `noodles`/local adapters deliberately instead of mixing dependency work into PharmCAT behavior slices.
+- [x] From `bcftools-rs`: land one focused behavior slice at a time, run the local Rust gate before moving on, and keep dependency-library work in a blocker section unless it is the only path forward.
+- [x] From `bcftools-rs`: keep historical notes only when they explain why a gate or parity claim changed; label superseded counts clearly so stale numbers do not look authoritative.
+- [x] From `bcftools-rs`: keep separate Rust and upstream/parity CI jobs even when they share checkout/cache steps, because Rust regressions and upstream fixture regressions need different triage.
+- [x] From `bcftools-rs` / `samtools-rs` / `htslib-rs`: use `.cargo/config.toml` `[patch]` entries in CI so cloned `repos/noodles` or sibling libraries are the actual crates under test.
+- [x] From `bioscript`: prefer checked-in `./lint.sh`, `./test.sh`, and domain-specific scripts once a project has more than one required command; CI should call the same scripts developers run locally.
+- [x] From `bioscript`: when PharmCAT behavior depends on sibling Rust ports, record the owner repo, exact proving command, missing API/behavior, user impact, and next unblock action instead of hiding the gap in PharmCAT code.
+- [x] From `bioscript`: make parity helpers print the command, fixture/case, log path, wall time, and smallest differing field so a failing Java-vs-Rust run is directly actionable.
+- [x] From all sibling workflows: keep the dependency checkout path stable and boring (`repos/<name>`) and make CI print exact cloned commits before running tests.
+- [x] From all sibling ports: keep the TODO as the operational handoff, not just a backlog. Every completed slice should name the Java source/test it covered and the local Rust gate that verified it.
+- [x] Add a generated or hand-maintained `docs/test-status.md` once the Java test inventory is large enough that TODO bullets are too coarse.
+- [ ] Add a "known Java quirks / preserve-or-fix decisions" table before changing any behavior that differs from Java output.
+- [ ] Add focused scripts for local gates after the first parity harness lands, matching the sibling repos' script-first workflow:
+  - `scripts/test-rust.sh` for fmt, clippy, and workspace tests;
+  - `scripts/test-java.sh` for the Java PharmCAT reference suite;
+  - `scripts/test-parity.sh` for promoted Java-vs-Rust fixtures.
+- [ ] Add a short "current handoff" section whenever a multi-day porting batch is in progress: current branch/commit, validated gates, exact pass/fail counts, and next unblocked slice.
+- [ ] Keep old status claims visibly superseded when a stronger CI/parity gate replaces them; do not delete the history if it explains why the gate changed.
+- [ ] Add a rolling "dependency blockers" section for `repos/noodles`, PharmCAT VCF adapters, `pgkb-common` behavior, and any future sibling Rust crate work.
+- [ ] Keep the first full Java test count and the first full Rust parity count as named baselines, then update only when the same command is rerun in a clean workspace.
 
 ## 0. Repository Baseline
 
@@ -22,17 +186,26 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - `repos/PharmCAT`: `55e3cb30a078537b4bec63b8d2b5035a20bc2fc0` on `development`.
   - `repos/noodles`: `5868f00a1f4fa6a0e0c32b685819fd3ef67b6473` on `madhava/bioscript`.
   - `repos/pgkb-common`: `70756e19aef8b46c63f4757f874c9c5ed31e3908` on `main`.
-- [ ] Decide whether CI should use submodules recursively or explicit `git clone` commands. Current scaffold clones into `repos/` like the Kestrel port.
-- [ ] Add a contributor note explaining that `repos/PharmCAT` and `repos/pgkb-common` are behavioral references, not runtime dependencies.
+- [x] Decide whether CI should use submodules recursively or explicit `git clone` commands. Current scaffold clones into `repos/` like the Kestrel port.
+- [x] Add a contributor note explaining that `repos/PharmCAT` and `repos/pgkb-common` are behavioral references, not runtime dependencies.
 
 ## 1. CI And Test Gates
 
 - [x] Add `.github/workflows/ci.yml` with independent jobs for source repo checkout, Java tests, and Rust tests.
+- [x] Add `workflow_dispatch` so the Java/Rust reference gates can be run manually.
 - [x] Make CI clone reference repos into `repos/`:
   - `https://github.com/madhavajay/PharmCAT.git`, branch `development`.
   - `https://github.com/madhavajay/noodles.git`, branch `madhava/bioscript`.
   - `https://github.com/madhavajay/pgkb-common.git`, default branch.
 - [x] Run Java and Rust jobs in parallel, following the Kestrel `rust.yml` / `java.yml` pattern.
+- [x] Keep CI checkouts non-recursive and clone explicit repos into `repos/` so GitHub Actions matches the local workspace layout.
+- [x] Convert SSH GitHub URLs to HTTPS in CI so private/local SSH config is not required.
+- [x] Keep `source-repos`, `java-reference-tests`, and `rust-gate` as independent jobs so Java and Rust failures are reported separately.
+- [x] Keep Java and Rust jobs dependency-free from each other so GitHub Actions can run them in parallel.
+- [x] Add Gradle cache for the Java reference test job.
+- [x] Add Cargo registry/git/target cache for the Rust gate.
+- [x] Add CI `.cargo/config.toml` patches so the cloned `repos/noodles` checkout is used for `noodles-bgzf` and `noodles-vcf`.
+- [x] Print cloned reference commits in CI before relying on the repos as an oracle.
 - [x] Add Rust CI commands that activate once `Cargo.toml` exists:
 
   ```sh
@@ -48,19 +221,60 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   ./gradlew test
   ```
 
-- [ ] Remove the temporary "skip Rust if no Cargo.toml" behavior after the Rust workspace skeleton lands.
+- [x] Remove the temporary "skip Rust if no Cargo.toml" behavior after the Rust workspace skeleton lands.
+- [ ] Split `.github/workflows/ci.yml` into Kestrel-style `java.yml`, `rust.yml`, and later `parity.yml` only if the combined workflow becomes hard to read. The current single workflow is acceptable because the jobs are already parallel and independent.
 - [ ] Add a parity CI job after the first Rust CLI/API exists:
   - build the Rust binary or test helper;
   - build or run the Java reference;
   - run both on identical fixtures;
   - diff outputs with documented normalization only.
+- [ ] When parity CI lands, keep it as a separate job from the ordinary Rust unit gate so Java/tool failures do not hide normal Rust regressions.
+- [ ] Model the first parity job on Kestrel:
+  - clone `repos/PharmCAT`;
+  - set up Java and Rust in the same job;
+  - build or locate the Java reference jar;
+  - build the Rust binary/test helper;
+  - run a dedicated parity test with `PHARMCAT_RUN_JAVA_PARITY=1` and `PHARMCAT_JAVA_DIR` or `PHARMCAT_JAR`.
+- [ ] In the parity job, clone `repos/noodles` and `repos/pgkb-common` too, then patch Cargo to those local checkouts so CI validates the same dependency graph as local development.
+- [ ] Add an explicit "show tool versions and commits" step before every Java/Rust/parity gate:
+  - `rustc --version`;
+  - `cargo --version`;
+  - `java -version`;
+  - `./gradlew --version`;
+  - `git -C repos/PharmCAT rev-parse HEAD`;
+  - `git -C repos/noodles rev-parse HEAD`;
+  - `git -C repos/pgkb-common rev-parse HEAD`.
 - [x] Add Java test report upload and keep it green before broad Rust changes.
+- [ ] Upload Rust parity failure artifacts once byte-output comparisons exist:
+  - Java output directory;
+  - Rust output directory;
+  - normalized diff files;
+  - captured stdout/stderr.
+- [ ] Upload Java Gradle HTML/XML reports and Rust parity artifacts with stable artifact names that include the gate name, not just the job number.
+- [ ] Add a Rust doc gate once the public API stabilizes, modeled after Kestrel:
+
+  ```sh
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+  ```
+
 - [ ] Add coverage later, using Kestrel's pattern as the target:
 
   ```sh
   cargo install cargo-llvm-cov --locked
   cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
   ```
+
+- [ ] Decide whether coverage should be advisory or enforced with a `--fail-under-lines` threshold after the initial API stabilizes.
+- [ ] Add a preflight CI step to print Rust, Cargo, Java, Gradle, and cloned reference commit versions before running parity.
+- [ ] Add explicit CI failure for missing reference repositories or missing required fixtures; do not let a missing clone become a skipped green job.
+- [ ] Add CI and local-script preflights that fail before running tests if a required cloned repo is missing or on an unexpected branch.
+- [ ] Add explicit CI failure for missing command-line tools once each gate needs them:
+  - Java/Gradle for Java reference tests;
+  - `bgzip`/`tabix` only if VCF compression/index parity needs them;
+  - Python/Perl only if preprocessor or upstream harness parity uses them.
+- [ ] Keep normal Rust unit tests Java-free. Java may be invoked only by env-gated parity tests or dedicated CI parity jobs.
+- [ ] Add a small promoted parity fixture set first, then a slower full parity job after the Rust pipeline can run end to end.
+- [ ] Record the exact CI command and pass/fail count in this TODO when a parity fixture is promoted.
 
 ## 2. Java Source And Test Inventory
 
@@ -79,7 +293,13 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - `repos/PharmCAT/build/reports/jacoco/`
 - [ ] Document tests that require network access, large data, environment variables, or generated resources.
 - [ ] Create a test map table: Java test class, Rust test module, fixtures used, parity status.
-- [ ] Add a status file later if needed, modeled after `bcftools-rs/docs/test-status.md`.
+- [x] Add a status file later if needed, modeled after `bcftools-rs/docs/test-status.md`.
+- [ ] Record exact Java test counts after a clean run: total, passed, failed, skipped, expected failures if any.
+- [ ] Mark any Java tests skipped because of missing optional tools or data as blockers until the skip reason is understood.
+- [ ] Identify Java CLI smoke tests separately from library/JUnit tests so CLI compatibility can be ported in a controlled lane.
+- [ ] Record the Java test classes that are pure unit tests, fixture-backed integration tests, CLI tests, and report golden-output tests.
+- [ ] For skipped Java tests, capture whether Java itself skipped them upstream or whether the Rust port environment is missing a dependency.
+- [ ] Preserve the first clean Java test report as the reference baseline, then update only after rerunning the same Gradle command.
 
 ## 3. Preprocessor Test Inventory
 
@@ -99,8 +319,8 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - [ ] parity-sensitive behavior;
   - [ ] CLI/test-only behavior;
   - [ ] intentionally out of scope.
-- [ ] Port `ChromosomeNameComparator` and `ChromosomePositionComparator` early; sort order can affect byte-for-byte output.
-- [ ] Add ordering tests for `chr1`, `chr2`, `chr10`, `chrX`, `chrY`, `chrM`, bare contigs, and nonstandard contigs.
+- [x] Port `ChromosomeNameComparator` and `ChromosomePositionComparator` early; sort order can affect byte-for-byte output.
+- [x] Add initial ordering tests mirroring `pgkb-common` comparator tests for numeric chromosomes, bare chromosome names, `chr` names, `X`, and `Y`.
 - [ ] Reimplement utility behavior locally as needed:
   - `CliHelper`
   - `AnsiConsole`
@@ -115,8 +335,8 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
 
 ## 5. Rust Workspace Skeleton
 
-- [ ] Initialize a Cargo workspace at the repository root.
-- [ ] Start with one crate unless the implementation naturally splits:
+- [x] Initialize a Cargo workspace at the repository root.
+- [x] Start with one crate unless the implementation naturally splits:
 
   ```text
   pharmcat-rs/
@@ -132,8 +352,8 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   └── fixtures/
   ```
 
-- [ ] Add `rust-toolchain.toml` after choosing the minimum Rust version.
-- [ ] Add workspace dependencies conservatively:
+- [x] Add `rust-toolchain.toml` after choosing the minimum Rust version.
+- [x] Add workspace dependencies conservatively:
   - `thiserror` or `anyhow` for errors;
   - `clap` for CLI compatibility;
   - `serde` / `serde_json` for JSON output;
@@ -141,53 +361,452 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - `tempfile` for parity tests;
   - `pretty_assertions` for readable test diffs;
   - `rstest` for Java-style parameterized tests.
-- [ ] Add `noodles` dependency through the local submodule:
+- [x] Add `noodles` dependency through the local submodule:
 
   ```toml
-  noodles = { git = "https://github.com/madhavajay/noodles.git", branch = "madhava/bioscript", features = ["bgzf", "vcf"] }
+  noodles-bgzf = { git = "https://github.com/madhavajay/noodles.git", branch = "madhava/bioscript", package = "noodles-bgzf" }
+  noodles-vcf = { git = "https://github.com/madhavajay/noodles.git", branch = "madhava/bioscript", package = "noodles-vcf" }
   ```
 
-- [ ] Keep `.cargo/config.toml` CI patching to `repos/noodles/noodles` so CI validates the checked-out source.
+- [x] Use local path dependencies to `repos/noodles` crates so CI validates the checked-out source.
 
 ## 6. VCF Adapter
 
 - [ ] Replace Java `org.pharmgkb:vcf-parser` with a small PharmCAT-specific adapter over `noodles-vcf` and `noodles-bgzf`.
-- [ ] Match Java `VcfSampleReader` behavior:
+- [x] Match initial Java `VcfSampleReader` header behavior:
   - sample names from header;
   - contig assembly extraction;
   - error on mixed contig assemblies;
   - no need to parse data rows for sample discovery.
 - [ ] Match Java `VcfReader` behavior:
   - metadata parsing;
-  - `FORMAT/AD` header handling and warnings;
-  - selected sample lookup;
-  - `GT`, `AD`, and `PS` sample field parsing;
-  - REF/ALT/FILTER handling;
-  - duplicate position handling;
-  - gzip/BGZF input;
-  - phased and effectively phased decisions;
-  - haploid chromosome handling;
-  - warnings and discarded-position behavior.
-- [ ] Add fixture-backed Rust tests using Java VCF fixtures first.
+  - [x] `FORMAT/AD` header handling and warnings for `Number=R`, missing header, `Number=.`, and invalid values accepted by Java;
+  - [x] selected sample lookup;
+  - [x] raw `GT`, `AD`, and `PS` sample field extraction;
+  - [x] REF/ALT/FILTER/ID/FORMAT field extraction;
+  - [x] initial `GT` vs `AD` mismatch warnings and discard flag for heterozygous GT with homozygous depths;
+  - [x] Java `SampleAllele`-style call extraction for REF/ALT allele selection, uppercased `vcfCall`, missing genotype sides, and invalid GT allele errors;
+  - [x] phased/effectively phased decisions and `PS` retention for phased rows;
+  - [x] REF/ALT allele validation warnings for structural, ambiguous, missing, and unknown bases, including selected structural ALT discard behavior;
+  - [x] duplicate position handling where first valid entry wins, PharmCAT preprocessor duplicates are silently skipped, and later valid rows can replace earlier invalid rows;
+  - [x] gzip/BGZF input via multi-member gzip decoding, matching Java's compressed VCF handling;
+  - [x] haploid chromosome handling for `chrY` and `chrM`, using Java's first non-missing genotype behavior;
+  - [x] initial warnings and discarded-position behavior for no-definition mode preprocessor filters (`PCATxREF`, `PCATxALT`, `PCATxINDEL`).
+  - remaining warnings and discarded-position behavior once definition-aware validation is ported.
+- [x] Add initial fixture-backed Rust tests using Java VCF fixtures:
+  - `VcfSampleReaderTest-multisample.vcf` for samples, assembly, first row fields, and multiallelic ALT order;
+  - `org/pharmgkb/pharmcat/multisample.vcf.bgz` for compressed input and Java's 15 effective allele calls;
+  - `VcfReaderTest-alleleOrder.vcf` for `.|1`, `1|.`, `0|.`, and `.|0` Java warning/discard behavior;
+  - `VcfReaderTest-phasing.vcf` for effective phasing on unphased heterozygous and homozygous rows;
+  - `VcfReaderTest-phaseSet.vcf` for raw `PS` extraction, Java phase-set retention, and rows without `PS`;
+  - `VcfReaderTest-AD*.vcf` for Java-compatible AD header policy and GT/AD mismatch warnings;
+  - `VcfReaderTest-filters.vcf` for no-definition preprocessor filter warnings/discards;
+  - `VcfReaderTest-structuralAlt.vcf` for selected vs unselected structural ALT warnings/discards;
+  - `VcfReaderTest-badAllele.vcf` for invalid GT allele index errors;
+  - `fixtures/vcf/haploid.vcf` for `chrY`/`chrM` haploid first-genotype behavior;
+  - missing sample error behavior.
+- [x] Run current focused Rust gate after the first row-level VCF adapter:
+
+  ```sh
+  cargo fmt --all --check
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
+  cargo test -p pharmcat --all-features
+  ```
+
 - [ ] Escalate to `htslib-rs` only if indexed queries, BCF support, or HTSlib-compatible edge behavior becomes necessary.
 
-## 7. Port Order
+## 7. Allele Definition Data Loading
 
-- [ ] Port data models with no external behavior first.
-- [ ] Port fixture/data loading next.
-- [ ] Port VCF parsing and sample handling.
-- [ ] Port allele definition data loading.
+- [x] Add Rust serde models for PharmCAT definition JSON:
+  - `DefinitionFile`;
+  - `VariantLocus`;
+  - `NamedAllele`.
+- [x] Add a Rust `DefinitionReader` equivalent for the first loader slice:
+  - sorted gene index;
+  - gene-to-definition lookup;
+  - shared genome-build validation;
+  - `<chr:position>` to `VariantLocus` locations of interest;
+  - `<chr:position>` to gene map.
+- [x] Port initial `DefinitionFile` derived fields used by matching:
+  - position-to-locus map;
+  - position-to-allele map;
+  - singular variants;
+  - named allele core positions;
+  - hidden core alleles field;
+  - suballeles map field.
+- [x] Add fixture-backed tests using Java definition fixtures:
+  - `NamedAlleleMatcher-cyp2b6.json` for metadata, variants, named alleles, reference allele, and allele maps;
+  - `NamedAlleleMatcher-dpyd.json` with CYP2B6 for multi-definition indexing.
+- [x] Port exemption JSON loading and extra-position indexing:
+  - `DataSerializerTest-exemptions.json` for required, ignored, and extra positions;
+  - `DataSerializerTest-exemptionsWithUnphasedPriorities.json` for NAT2 unphased diplotype priorities;
+  - CYP2C9 extra-position indexing into `DefinitionReader` locations.
+- [x] Port structural variant filtering and ignored-position/ignored-allele exemption behavior:
+  - explicit data-ingestion transforms remove structural named alleles;
+  - ignored named alleles are removed case-insensitively via exemptions;
+  - ignored positions are matched with Java's RSID/HGVS rule and missing ignored positions error like Java;
+  - positions made unused by filtering are removed and named allele allele arrays are compacted.
+
+## 8. Port Order
+
+- [x] Port data models with no external behavior first, for VCF rows and initial definition JSON.
+- [x] Port fixture/data loading next, for VCF fixtures and initial definition JSON fixtures.
+- [x] Port VCF parsing and sample handling.
+- [x] Port allele definition data loading.
 - [ ] Port named allele matching.
+  - [x] Add first Rust `MatchData`/haplotype-match primitives:
+    - sample allele collection by definition position;
+    - missing definition position tracking;
+    - Java `CombinationUtil.generatePermutations` behavior for phased, unphased, haploid, and phase-set-aware sample alleles;
+    - Java `MatchData.comparePermutations`-style haplotype matching with `null` definition alleles as wildcards;
+    - fixture-backed CYP3A5 `haplotyper.vcf`/`haplotyper.json` test matching Java `testCallDiplotypePath` sample permutations.
+  - [x] Port initial diplotype pair generation, ranking, and top-candidate filtering:
+    - Java `DiplotypeMatcher.determineHomozygousPairs` behavior for single-permutation samples;
+    - Java `DiplotypeMatcher.determineHeterozygousPairs` viable-complement filtering;
+    - Java diplotype sorting by score, haplotype name, and sequence set;
+    - Java top-candidate-only score filtering;
+    - fixture CYP3A5 `haplotyper` now computes `*1/*2`;
+    - synthetic tests mirror `DiplotypeMatcherTest` cases 1-5.
+  - [x] Port missing-position haplotype marshalling details and wobble scoring:
+    - haplotypes are compacted to available sample positions when definition positions are missing;
+    - each compacted haplotype records which defining positions were missing;
+    - score overrides preserve Java's pre-reference-fill score after `defaultMissingAllelesToReference`;
+    - reference fill uses the definition REF when the reference named allele uses an IUPAC wobble;
+    - IUPAC wobble alleles lose score when all supporting sample sequences are reference.
+  - [x] Port initial combination and partial allele matching:
+    - Java `CombinationMatcher.compute` strand-match flow for simple, combination, and partial matches;
+    - viable combination grouping that avoids overlapping core positions;
+    - combination named-allele construction with merged allele arrays, component counts, and partial counts;
+    - partial HGVS-style names via `VariantLocus::hgvs_for_vcf_allele`;
+    - combination matches feed the existing diplotype pair generation;
+    - synthetic combination/partial test covers `[*2 + *5 + g.3C>T]`;
+    - Java `HaplotypeNameComparator` combination ordering, including partial-before-combination diplotype rendering;
+    - fixture-backed UGT1A1 `NamedAlleleMatcher-combinationBaseline` test computes `*1/*1`;
+    - fixture-backed UGT1A1 `NamedAlleleMatcher-combinationPhased`, `combinationUnphased`, `partialWithCombination`, and `partial` tests match Java diplotype names.
+  - [x] Add first standard-gene result wrapper:
+    - `call_standard_gene` follows Java `NamedAlleleMatcher.callAssumingReference` branch order;
+    - no-call result for genes with no sample alleles;
+    - no-call result for partial-missing alleles when combination matching is disabled;
+    - exact diplotype result for the CYP3A5 Java haplotyper fixture;
+    - combination fallback result for the UGT1A1 Java partial-with-combination fixture.
+  - [ ] Port lowest-function gene behavior, including DPYD HapB3 special handling.
+    - [x] Add first Rust `DpydHapB3Matcher` primitive:
+      - locates HapB3 exonic/intronic variants by rsID in the DPYD definition;
+      - detects HapB3 vs non-HapB3 sample variants;
+      - ports Java `callHapB3HaplotypeMatches` strand-call behavior for phased calls, matching phase sets, intronic-only calls, exonic-only calls, and intron/exon mismatch warnings;
+      - fixture-backed tests use Java `NamedAlleleMatcher-dpyd.json` HapB3 loci and named alleles.
+    - [x] Add initial DPYD HapB3 phased merge helpers:
+      - `add_phased_hap_b3_call_to_ref` for HapB3-only phased/reference data;
+      - `merge_phased_hap_b3_call` for adding HapB3 alleles to existing phased diplotype matches;
+      - Java-style combination construction when HapB3 is merged onto a non-reference haplotype.
+    - [x] Port Java `DpydHapB3Matcher.fixPartials` behavior:
+      - detects HapB3 exonic/intronic partial names emitted by combination matching;
+      - removes HapB3 partials before named HapB3 merge;
+      - collapses Reference plus HapB3 partial back to Reference;
+      - preserves non-HapB3 components when HapB3 partials are stripped.
+    - [x] Add initial DPYD lowest-function diplotype helper for effectively phased data:
+      - exact diplotype match branch without HapB3 alleles;
+      - HapB3-only Reference merge branch;
+      - combination branch with HapB3 partial fixing and named HapB3 merge.
+    - [x] Wire DPYD lowest-function helper into the first higher-level gene-calling API:
+      - `GeneCallResult` models Java `ResultBuilder` no-call, diplotype, and haplotype fallback branches;
+      - `call_dpyd_lowest_function_gene` follows Java `NamedAlleleMatcher.callLowestFunctionGene` branch order;
+      - result-level tests cover phased HapB3 diplotype calls, unphased HapB3 fallback haplotypes, and no-sample no-call.
+    - [x] Port lowest-function haplotype fallback selection and homozygous component expansion:
+      - Java-style `callHaplotypesForLowestFunctionGene` fallback helper;
+      - Reference stripping when more than two haplotype candidates are present;
+      - homozygous component duplication from combination diplotype matches;
+      - DPYD HapB3 haplotype append path for unphased fallback calls.
+    - [x] Add the first non-DPYD lowest-function wrapper for RYR1:
+      - `call_ryr1_lowest_function_gene` follows Java `NamedAlleleMatcher.callLowestFunctionGene` without DPYD HapB3 preprocessing;
+      - covers exact diplotype matching for effectively phased RYR1 calls;
+      - falls through to combination diplotype and haplotype fallback paths like Java for later RYR1 cases;
+      - fixture-backed tests use Java main-resource `RYR1_translation.json` and mirror `NamedAlleleMatcherRyr1Test` reference, `rs137933390` heterozygous, and missing-position cases.
 - [ ] Port phasing and diplotype resolution.
+  - [x] Port first Java `ResultBuilder.build` unphased diplotype priority finalization:
+    - exemption-aware `call_standard_gene_with_exemption` keeps all unphased candidates when priorities exist;
+    - `finalize_gene_call_result` selects the priority diplotype when the candidate set matches an exemption rule;
+    - emits a Rust `GeneCallWarning::UnphasedPriority` equivalent to Java's `unphased-priority` note;
+    - fixture-backed UGT1A1 unphased combination test covers result narrowing and warning emission.
+  - [x] Port suballele conversion in `DiplotypeMatch.handleSuballeleConversion`:
+    - result finalization rewrites diplotype names after unphased priority selection;
+    - rewrites component haplotype names like Java;
+    - synthetic result-level test covers `*4a` to `*4` conversion.
+  - [x] Port required-position and AMP Tier 1 result warnings into the result-level API:
+    - `MatchData` tracks missing required and missing AMP Tier 1 positions from exemptions;
+    - missing required positions return a no-call with `GeneCallWarning::MissingRequiredPosition`;
+    - missing AMP Tier 1 positions add `GeneCallWarning::MissingAmp1Position` during result finalization;
+    - synthetic result-level tests cover both Java branches.
 - [ ] Port phenotype lookup and activity score handling.
+  - [x] Port first activity-score helper:
+    - `phenotype::normalize_activity_score` mirrors Java `ActivityUtils.normalize`;
+    - covers blank/null, integer-to-decimal, `>` and `>=`-style scores using Java's `>=`/`≥` semantics, and `n/a`;
+    - focused tests mirror `ActivityUtilsTest`.
+  - [x] Port `PhenotypeUtils.normalize`:
+    - whitespace collapse and trimming;
+    - metaboliser/metabolizer spelling normalization;
+    - PM/IM/NM/EM/UM abbreviation expansion;
+    - extensive-to-normal metabolizer mapping;
+    - likely/possible phenotype prefixes and indeterminate detection;
+    - focused tests mirror `PhenotypeUtilsTest`.
+  - [x] Port first outside-call TSV parser slice:
+    - `OutsideCallValidation` models the small `Env` surface needed for parser parity before the full Java environment is ported;
+    - `parse_outside_call_line`, `parse_outside_calls_file`, and `parse_outside_calls_str` mirror Java `OutsideCall` / `OutsideCallParser` entry points;
+    - preserves Java TSV field validation, blank/comment skipping, gene-prefix stripping, phenotype normalization, duplicate-string set behavior, no-call handling, and named-allele warnings;
+    - includes CYP2D6 and HLA-A/HLA-B suballele normalization warning behavior covered by focused Rust tests;
+    - remaining gap: replace the lightweight validation model with real definition/phenotype environment data and exact Java `HaplotypeNameComparator` ordering when the full phenotyper pipeline is wired.
+  - [x] Port first phenotype map JSON data loading:
+    - serde models for Java `GenePhenotype`, `DiplotypeRecord`, and `HaplotypeRecord`;
+    - `PhenotypeMap::from_dir` loads all per-gene JSON phenotype files and rejects empty/duplicate inputs;
+    - `GenePhenotype` helpers cover activity-gene detection, haplotype function/activity lookup, and diplotype key lookup;
+    - fixture-backed tests use Java main-resource phenotype JSON files and mirror `PhenotypeMapTest` basics.
+  - [x] Port diplotype-to-phenotype lookup helpers and activity score inference primitives:
+    - `GenePhenotype::lookup_phenotype_by_diplotype_key` mirrors Java `lookupPhenotypesByDiplotype`;
+    - `GenePhenotype::lookup_activity_by_diplotype_key` mirrors Java `lookupActivityByDiplotype`;
+    - `GenePhenotype::lookup_phenotypes_by_activity_score` mirrors Java `lookupPhenotypeByActivityScore`;
+    - `GenePhenotype::lookup_activity_scores_by_phenotype` mirrors Java `lookupActivityScoresByPhenotype`;
+    - preserves Java fallback strings for unknown alleles (`No Result`), missing non-activity phenotypes (`n/a`), missing activity phenotypes (`Indeterminate`), and missing activity scores (`n/a`);
+    - fixture-backed tests cover CYP2C19 non-activity lookup and CYP2D6 activity-score lookup from Java phenotype JSON.
+  - [x] Port first RYR1 lowest-function recommendation selection from `LowestFunctionGeneCaller`:
+    - `GenePhenotype::infer_ryr1_lowest_function_from_diplotypes` ranks candidate diplotypes by malignant-hyperthermia function count, then Java haplotype-name order;
+    - `GenePhenotype::infer_ryr1_lowest_function_from_haplotypes` ranks unphased haplotype matches with malignant functions first, then Java haplotype-name order;
+    - combination haplotype labels are split before selection so malignant components win over normal/uncertain components;
+    - focused tests mirror `LowestFunctionGeneCallerTest.testRyr1DiplotypeComparator` and add unphased haplotype cases from the broader `Ryr1Test` shape using Java `RYR1.json`.
+  - [x] Port first DPYD lowest-function recommendation selection from `LowestFunctionGeneCaller`:
+    - `GenePhenotype::infer_dpyd_lowest_function_from_diplotypes` picks the lowest CPIC activity haplotype from each phased strand, then ranks candidate diplotypes by total activity score and Java haplotype-name order;
+    - missing DPYD haplotype activity scores rank as `2.0` for diplotype-total selection, matching Java `DiplotypeCpicActivityScoreComparator`;
+    - `GenePhenotype::infer_dpyd_lowest_function_from_haplotypes` sorts unphased haplotype matches by CPIC activity score and Java haplotype-name order, preserving Java allele field order for the inferred diplotype;
+    - focused tests mirror representative `LowestFunctionGeneCallerTest` DPYD phased/combination and unphased haplotype cases using Java `DPYD.json`.
+  - [ ] Port full reporter `Diplotype.annotateDiplotype` behavior around outside activity scores, outside phenotypes, HLA handling, lookup-key assignment, and mismatch warnings.
+    - [x] Add first Rust `DiplotypeAnnotationInput` / `AnnotatedDiplotype` model for the Java `Diplotype` fields mutated by annotation.
+    - [x] Port called-diplotype annotation for non-activity genes, including CYP2C19 `*1/*1` lookup-key parity.
+    - [x] Port called-diplotype annotation for activity-score genes, including CYP2D6 `*1/*3` and DPYD `Reference/c.2846A>T` activity lookup parity.
+    - [x] Port outside phenotype/activity-score mismatch checks for the CYP2D6 cases covered by Java `DiplotypeTest.testOutsideCall`.
+    - [x] Port HLA-specific phenotype generation and lookup-key behavior:
+      - HLA annotation runs before phenotype-map lookup, matching Java because HLA-A/HLA-B are not JSON phenotype-map genes;
+      - HLA-A reports `*31:01 positive/negative`;
+      - HLA-B reports `*15:02`, `*57:01`, and `*58:01` positive/negative values in Java sorted-set order;
+      - unknown HLA alleles emit `No Result` lookup keys when no phenotype is provided;
+      - phenotype-only outside HLA calls use the outside phenotype as lookup key;
+      - unsupported HLA genes return the Java factory error text.
+    - [x] Wire first annotated diplotype bridge into the current report/recommendation model:
+      - `OutsideCall::to_annotation_input` mirrors Java `DiplotypeFactory.splitDiplotype` shape checks for outside-call diplotypes;
+      - `ReportGene::from_annotated_diplotype` converts annotated phenotype-side data into lookup keys, source diplotype labels, activity-score flags, outside-call flags, and Java-style diplotype keys;
+      - `ReportContext::from_gene_reports` now merges repeated gene reports for the same gene instead of overwriting them, matching the first Java `GeneReport.addOutsideCall` behavior needed for multiple outside calls;
+      - focused tests cover CYP2D6 outside calls feeding recommendation genotypes and multiple HLA-B outside calls feeding CPIC allopurinol matching.
+    - [x] Wire first matcher `GeneCallResult` bridge into the current report/recommendation model:
+      - `ReportGene::from_lowest_function_gene_call_result` accepts DPYD and RYR1 lowest-function matcher results and matching phenotype JSON;
+      - DPYD diplotype and haplotype matcher result branches feed the DPYD lowest-function recommendation selector before `DiplotypeAnnotationInput::annotate`;
+      - RYR1 diplotype and haplotype matcher result branches feed the RYR1 lowest-function recommendation selector before `DiplotypeAnnotationInput::annotate`;
+      - no-call, unsupported gene, and mismatched phenotype inputs return no report gene instead of guessing;
+      - `ReportGene::from_dpyd_gene_call_result` and `ReportGene::from_ryr1_gene_call_result` remain as explicit gene-specific wrappers;
+      - focused test runs the real Java-resource `DPYD_translation.json` matcher for `rs67376798`, converts `Reference/c.2846A>T` to a report gene, and verifies `1.5` activity-score recommendation lookup plus `Intermediate Metabolizer` phenotype;
+      - focused test runs the real Java-resource `RYR1_translation.json` matcher for `rs193922746`, converts `Reference/c.97A>G` to a report gene, and verifies `Malignant Hyperthermia Susceptibility` recommendation lookup.
+    - [x] Add first Java-style `Diplotype` report surface:
+      - `ReportDiplotype` serializes a minimal Java `Diplotype` shape with gene, label, allele names, lookup keys, phenotypes, activity score, diplotype key, and match score;
+      - `ReportGene` now has separate `sourceDiplotypes` and `recommendationDiplotypes` arrays while retaining the flattened fields used by the current TSV/recommendation code;
+      - lowest-function matcher bridges populate source diplotypes from matcher result labels and scores, and recommendation diplotypes from the inferred annotated diplotype;
+      - focused DPYD/RYR1 tests verify source diplotype labels/match scores are distinct from recommendation diplotype lookup data.
+    - [x] Add first Java-style nested `Haplotype` report surface:
+      - `ReportHaplotype` serializes gene, name, function, reference, and activityValue like Java `Haplotype`;
+      - `ReportDiplotype.allele1` and `ReportDiplotype.allele2` now serialize nested haplotype objects instead of string labels;
+      - source and recommendation diplotypes populate haplotype function/activity/reference data from Java phenotype JSON;
+      - focused DPYD/RYR1 tests verify nested haplotype functions, activity values, reference flags, and Java `Haplotype.toString` display-name behavior.
+    - [x] Expand `ReportDiplotype` toward Java `Diplotype` fidelity:
+      - serializes Java `inferred`, `inferredSourceDiplotypes`, and `combination` fields;
+      - lowest-function recommendation diplotypes retain their source diplotypes like Java `LowestFunctionGeneCaller`;
+      - DPYD/RYR1/CACNA1S/CFTR labels now use Java CPIC-style heterozygous labels from `Diplotype.buildLabel(false)`;
+      - combination labels are retained as haplotype names, marked with `combination`, and kept in the Java-style diplotype key;
+      - focused DPYD/RYR1 tests verify inferred source diplotypes and CPIC labels, and a combination-label test covers Java `DiplotypeFactory` behavior.
+    - [x] Add Java `Diplotype.compareTo`-style sorting for report diplotype lists:
+      - source, recommendation, and nested inferred-source diplotype arrays sort by gene, then allele1/allele2 using `HaplotypeNameComparator` semantics when labels differ, then inferred flag;
+      - merged report genes re-sort diplotype arrays after appending unique incoming entries;
+      - focused sort test covers allele ordering, inferred tie-breaking, and recursive inferred-source sorting.
+    - [x] Add remaining Java `Diplotype` outside-call and variant report fields to the Rust report diplotype surface:
+      - serializes `outsidePhenotype`, `outsidePhenotypeMismatch`, `outsideActivityScore`, `outsideActivityScoreMismatch`, and `variant`;
+      - annotated outside-call diplotypes propagate Java mismatch flags and expected values into nested report diplotypes;
+      - focused CYP2D6 outside-call test verifies mismatch flags plus Java JSON field names and nested variant data.
+    - [x] Populate Java-style source/recommendation diplotype arrays for annotated outside-call report genes:
+      - `ReportGene::from_annotated_diplotype` now adds the annotated outside-call diplotype to both `sourceDiplotypes` and `recommendationDiplotypes`, matching the non-lowest-function `GeneReport.addOutsideCall` shape;
+      - merged repeated outside-call genes preserve and Java-sort multiple source/recommendation diplotypes instead of overwriting them;
+      - focused CYP2D6 and HLA-B tests verify outside-call recommendation matching plus merged `*57:01`/`*58:01` source and recommendation diplotype lists.
+    - [x] Port first unknown/no-call `GeneReport` construction for lowest-function matcher results:
+      - `ReportGene::unknown` builds Java `DiplotypeFactory.makeUnknownDiplotype`-style `Unknown` haplotypes and adds the same unknown diplotype to both source and recommendation arrays;
+      - DPYD no-call matcher results now produce a report gene instead of being dropped, with `No Result` lookup key, phenotype, and activity score;
+      - focused DPYD test starts from an empty allele map, verifies the matcher `NoCall` branch, then verifies `Unknown/Unknown` source/recommendation diplotypes and recommendation lookup behavior.
+    - [x] Extend unknown/no-call `GeneReport` construction to standard matcher and outside-call entry points:
+      - `ReportGene::from_standard_gene_call_result` now returns Java-style unknown source/recommendation diplotypes for non-lowest-function matcher `NoCall` results;
+      - `ReportGene::from_outside_call` handles Java no-call outside-call rows (`.` / `./.` after parsing) by emitting an outside report with unknown source/recommendation diplotypes;
+      - focused CYP3A5 and HLA-B tests verify `No Result` recommendation lookup plus `Unknown/Unknown` source/recommendation diplotype arrays.
+    - [x] Add a phenotype-aware outside-call report bridge:
+      - `ReportGene::from_outside_call` now passes the matching `GenePhenotype` into nested `ReportDiplotype` construction instead of dropping it after annotation;
+      - `ReportGene::from_annotated_diplotype_with_phenotype` keeps the older annotated bridge available while carrying Java `GenePhenotype.assignActivity`-style haplotype function/activity data into source and recommendation diplotypes;
+      - focused CYP2D6 outside-call test verifies nested `*1`/`*3` haplotype functions and activity values on both source and recommendation diplotypes.
+    - [x] Replace the first standard matcher diplotype bridge for non-lowest-function results:
+      - `ReportGene::from_standard_gene_call_result` now converts ordinary matcher `Diplotypes` into Java-style annotated `ReportDiplotype` objects instead of only handling `NoCall`;
+      - source and recommendation diplotype arrays both receive the matcher diplotypes for non-custom genes, matching Java `GeneReport(GeneCall, Env)`;
+      - focused CYP3A5 fixture test runs the Java haplotyper VCF, converts the `*1/*2` matcher result, and verifies source/recommendation diplotypes, match score, nested haplotype function data, diplotype key, and recommendation lookup key behavior.
+    - [x] Extend standard matcher report conversion to combination diplotype results:
+      - UGT1A1 combination matcher results now preserve all Java source and recommendation diplotypes instead of only validating the first ordinary diplotype path;
+      - combination diplotype labels retain Java bracketed names and `combination=true` flags in both report arrays;
+      - focused UGT1A1 test runs `NamedAlleleMatcher-partialWithCombination.vcf`, verifies four source/recommendation diplotypes, and checks match-score preservation on a representative combination call.
+    - [x] Port the first Java SLCO1B1 custom recommendation fallback:
+      - `ReportGene::apply_slco1b1_custom_recommendation` mirrors `Slco1b1CustomCaller.inferDiplotypes` for unknown non-outside SLCO1B1 reports with a single `rs4149056` variant report;
+      - `T` maps to `*1`, `C` maps to `*5`, alleles are sorted like Java before recommendation lookup, and duplicate `rs4149056` reports are an error;
+      - the inferred recommendation diplotype carries `variant`, `inferred=true`, `matchScore=0`, Java-style inferred source diplotype text, and updates top-level lookup fields for recommendation matching;
+      - focused SLCO1B1 test starts from an unknown report plus `rs4149056 T/C`, verifies `Unknown/Unknown` remains the source call, `*1/*5` becomes the recommendation call, print-call source is `rs4149056 C/rs4149056 T`, and lookup resolves to `Decreased Function`.
+    - [x] Carry first standard matcher variant reports and VCF warnings into `GeneReport`:
+      - `ReportGene::from_standard_gene_call_result_with_definition` wraps the existing standard matcher bridge, attaches Java `VariantReportFactory`-style variant reports from `MatchData.positions` and `missing_positions`, then invokes the SLCO1B1 fallback;
+      - `VariantReport` now carries optional Java fields for gene, chromosome, alleles, phasing, phase set, and warnings while preserving the existing minimal constructor surface;
+      - `MatchData` exposes retained sample alleles by definition position, and `SampleAllele` retains Java `getVcfCall` text for report conversion;
+      - `ReportGene::add_variant_warning_messages` mirrors Java `GeneReport.addVariantWarningMessages` by matching warning keys against `VariantReport.toChrPosition`;
+      - focused tests verify an SLCO1B1 no-call report can infer `*1/*5` from real matcher `MatchData` variant reports, attach missing-position reports, preserve `rs4149056` metadata, and attach VCF warning text to the matching variant.
+    - [x] Freeze SLCO1B1 custom fallback edge cases:
+      - duplicate `rs4149056` variant reports return the Java-equivalent `"More than one report found for rs4149056"` error path;
+      - unsupported `rs4149056` calls such as `A/C` are ignored, leaving the unknown source/recommendation diplotypes and `No Result` lookup untouched.
+    - [x] Port the next Java `VariantReport` surface:
+      - `VariantReport` ordering now mirrors Java `compareTo`: non-missing reports first, then chromosome string, then position;
+      - `VariantReport::is_missing` now treats blank calls as missing, matching Java `StringUtils.isBlank`;
+      - `VariantReport::is_het_call` mirrors Java `VariantUtils.isHetCall` for ambiguity-message matching;
+      - matcher-backed `VariantReport` construction now only keeps Java-valid call strings;
+      - `ReportGene` now carries `variantsOfInterest`, and report-as-genotype messages search both regular variants and variants-of-interest like Java `MessageHelper`;
+      - focused tests cover Java sort order, call helper behavior, and report-as-genotype lookup through `variantsOfInterest`.
+    - [x] Carry ported matcher warning messages into `GeneReport`:
+      - `ReportGene` now serializes Java-style `messages` and preserves message sets during report-gene merging;
+      - standard and lowest-function matcher report conversion attach translated `GeneCallWarning` messages;
+      - warning conversion covers Java `unphased-priority`, `missing-required-position`, and `missing-amp1-position` note messages with Java rule names and text shapes;
+      - focused tests verify no-call and diplotype standard matcher results carry the expected Java message names, types, and message text.
+    - [ ] Replace the bridge with full Java `GeneReport`/`Diplotype` source and recommendation diplotype lists once matcher output and custom callers are fully ported.
+  - [ ] Port phenotype map TSV/data-ingestion transforms if needed for build-time data generation.
 - [ ] Port recommendation/report data loading.
+  - [x] Port first prescribing-guidance JSON loader:
+    - Rust `PgkbGuidelineCollection` loads Java `reporter/prescribing_guidance.json`;
+    - preserves Java `DataSource` and `PrescribingGuidanceSource` source/object-type matching;
+    - indexes guideline packages by related chemical like Java `PgkbGuidelineCollection`;
+    - exposes guideline packages, source filtering, chemical/source lookup, genes used by source, and genes with recommendations;
+    - fixture-backed tests mirror Java `PgkbGuidelineCollectionTest`.
+  - [x] Port first recommendation lookup-key matching helper:
+    - `RecommendationAnnotation::lookup_genes` mirrors Java `getLookupGenes`;
+    - `map_contains` mirrors Java `RecommendationUtils.mapContains`;
+    - `RecommendationGenotype` builds Java-style lookup-key combinations;
+    - focused test mirrors Java `RecommendationAnnotationTest.testMatchesGenotype`.
+  - [ ] Port `DrugReport`, `GuidelineReport`, and `ReportContext` construction.
+    - [x] Add first Rust `ReportContext` construction path from prescribing guidance plus minimal gene-report inputs.
+    - [x] Add first Rust `DrugReport` construction by source/drug, matching Java's loop over `PrescribingGuidanceSource` and guidance chemical names.
+    - [x] Add first Rust `GuidelineReport` construction for genes present in the report context.
+    - [x] Add first Rust `AnnotationReport` construction for matched recommendations.
+    - [x] Port genotype lookup-key matching path enough to match real CPIC abacavir/HLA-B recommendations from Java `prescribing_guidance.json`.
+    - [x] Port exact diplotype-key matching with Java-compatible numeric/object shapes for non-phenotype lookup keys:
+      - `ReportGene::with_diplotype_counts` builds Java `Diplotype.getDiplotypeKey`-style nested maps;
+      - allele counts are serialized as JSON floating numbers to match Gson/Java `Double` values in recommendation lookup keys;
+      - real-data test matches DPWG atazanavir/UGT1A1 `*28/*28` to recommendation `DPWG-PA166411721` through exact diplotype-key matching before phenotype lookup.
+    - [ ] Port full `AnnotationReport.addGenotype` phenotype/activity-score extraction, highlighted variants, warfarin special case, and diplotype mismatch handling.
+      - [x] Preserve matched report genes on `RecommendationGenotype` so annotation construction can inspect Java-like diplotype data after lookup-key matching.
+      - [x] Extract phenotype values from matched genotype report genes instead of copying recommendation lookup-key strings.
+      - [x] Port allele-presence phenotype filtering for `HLA-A`/`HLA-B` using guideline related-allele names, with real CPIC allopurinol/HLA-B coverage.
+      - [x] Extract activity scores from activity-score diplotypes and mark non-activity-score genes as `n/a` when any diplotype in the genotype uses activity score.
+      - [x] Preserve Java conflict behavior for multiple non-allele-presence phenotypes/activity scores on the same gene.
+      - [x] Port first highlighted-variant path:
+        - `VariantReport` models the minimal Java variant fields needed for message rules;
+        - `MessageCatalog::report_as_genotype_messages_for_drug` filters Java `report-as-genotype` messages by drug and source;
+        - `ReportContext::apply_report_as_genotype_messages` computes `rsid:call` strings like Java `MessageHelper.computeGenotype`, including `|` to `/` call normalization and `Unknown` fallback;
+        - `AnnotationReport` now serializes `highlightedVariants`;
+        - focused test covers the current Java CPIC warfarin `rs12777823` report-as-genotype rule.
+      - [x] Port CPIC warfarin special-case construction:
+        - `GuidelineReport` adds synthetic `AnnotationReport` local id `warfarin-cpic-1-1` for CPIC warfarin;
+        - the synthetic annotation preserves matched recommendation genotypes but skips phenotype/activity extraction like Java `forCpicWarfarin`;
+        - real-data test covers CPIC warfarin/CYP2C9 from Java `prescribing_guidance.json`.
+      - [x] Port first outside-call mismatch note handling:
+        - `ReportGene` preserves `outsidePhenotypeMismatch` and `outsideActivityScoreMismatch` from annotated outside-call diplotypes;
+        - `AnnotationReport` now serializes annotation-level messages;
+        - matched annotations emit Java-style `warn.mismatch.outsideCall` notes choosing "activity score" vs "phenotype" with the same user-facing text as Java HTML recommendation rendering;
+        - focused test covers a CYP2D6 conflicting outside activity score path.
+      - [ ] Revisit Java `AnnotationReport.checkDiplotypes` if upstream starts mutating phenotype maps there; current Java method only collects mismatches and does not apply them.
+    - [x] Port related-drug backlinks and missing-variant message injection once `GeneReport` exists:
+      - `DrugLink` serializes Java `name`/`id` fields and sorts by name then id;
+      - `ReportGene.relatedDrugs` is present in JSON, including the empty-array case;
+      - `ReportContext::from_gene_reports` backfills gene-level drug links from constructed guideline/drug reports;
+      - `DrugReport` also applies the link to transient guideline `report_genes` for later HTML helper parity;
+      - missing-variant drug messages are already injected through Java-style related gene symbols.
+  - [x] Port message/disclaimer resource loading:
+    - `MessageAnnotation` and `MatchLogic` deserialize Java `reporter/messages.json`;
+    - `MessageCatalog` mirrors Java `MessageHelper` resource indexes by gene, drug, and static `pcat-` key;
+    - drug message lookup preserves Java source filters for `cpic-`, `dpwg-`, and `fda-` message names;
+    - `load_disclaimers_template` loads Java `reporter/disclaimers.hbs`;
+    - real-resource tests cover the 64 Java messages, 11 static keys, CPIC/DPWG warfarin source filtering, and disclaimer template markers.
 - [ ] Port JSON output generation.
+  - [x] Add first reporter JSON serialization path:
+    - report models derive serde `Serialize` with Java-facing field names for the currently ported report surface;
+    - `PrescribingGuidanceSource` serializes as Java enum names such as `CPIC_GUIDELINE`;
+    - `ReportContext::to_json_string` emits pretty JSON for the current Rust report model;
+    - `write_report_json` writes `.json` files and rejects non-`.json` paths like Java `DataSerializer.serializeToJson`;
+    - focused tests cover top-level report fields, gene/drug/guideline/annotation fields, source enum keys, pretty output, and extension validation.
+  - [ ] Add timestamp, PharmCAT version, matcher metadata, and full Java `GeneReport` JSON fields once those report surfaces are ported.
+  - [ ] Add byte-for-byte reporter JSON parity fixtures after full report construction exists.
 - [ ] Port TSV/report output generation.
+  - [x] Add first calls-only TSV writer over the currently ported report-gene surface:
+    - exposes Java `CallsOnlyFormat` constants for `no call`, `Sample ID`, `Variants`, and `Undocumented variants`;
+    - emits the Java calls-only header shape for gene, diplotype, phenotype, activity score, haplotype placeholders, outside-call flag, match score, missing positions, and recommendation lookup columns;
+    - supports optional sample-id column and PharmCAT version line;
+    - writes `.tsv` files and rejects non-`.tsv` paths with Java-style validation text;
+    - focused tests cover header column count/order, row field placement, sample id, activity score fields, file writing, and extension validation.
+  - [ ] Replace the first TSV row adapter with full Java `GeneReport`/`Diplotype` calls-only output once those models are ported.
+  - [x] Port first debug columns for variants, missing variants, and undocumented variants:
+    - `VariantReport` tracks position, call, reference allele, missing state, non-reference status, and undocumented-variation flag;
+    - `CallsOnlyTsvOptions` emits Java-positioned `Variants`, `Missing positions`, and `Undocumented variants` columns;
+    - variants column includes non-missing, non-reference calls as `position:call`;
+    - missing variants can be emitted as positions instead of yes/no;
+    - undocumented variants emit positions plus the Java `treat as reference` tag when configured;
+    - focused test covers all three debug columns on the current report-gene surface.
+  - [x] Port single-file append mode and sample metadata for the current TSV writer:
+    - `CallsOnlyTsvOptions` now carries sorted sample properties appended after recommendation lookup columns;
+    - single-file writes append only data rows when the output file already exists, preserving the first version/header block like Java;
+    - focused test covers sample-id, sample metadata column order/values, and append-without-duplicate-header behavior.
 - [ ] Port HTML/report output generation if in scope.
+  - [x] Add first HTML resource and writer slice:
+    - `HtmlTemplateSet` loads Java `report.hbs`, `header.hbs`, `uncallableGenesNote.hbs`, and `disclaimers.hbs` from the reporter resource directory;
+    - `report_html_string` renders a minimal HTML report over the currently ported `ReportContext` surface with title, metadata, genotype summary, matched prescribing recommendations, and disclaimer anchor;
+    - `write_report_html` writes `.html` files and rejects non-`.html` paths with Java-style validation text;
+    - focused tests cover Java template markers, HTML escaping, metadata, matched allopurinol recommendation text, file writing, and extension validation.
+  - [ ] Replace minimal HTML rendering with Java Handlebars/template parity once full `GeneReport`, `Recommendation`, helper functions, and report view models are ported.
 - [ ] Port CLI argument compatibility if in scope.
+  - [x] Add first Java `PharmCAT`/`BaseConfig` parser slice without adding new dependencies:
+    - recognizes Java short and long aliases for matcher, phenotyper, reporter, input, output, sample, gene, definitions, research, and report-format options;
+    - preserves default stage selection (`matcher`, `phenotyper`, and `reporter` on unless specific stages are requested);
+    - ports Java sample parsing, sample-file comma rejection, gene uppercasing, reporter-source mapping, research-mode reporter restrictions, and base-filename suffix cleanup;
+    - validates first Java CLI input errors for missing matcher VCF, phenotyper input, reporter input, `-s`/`-S` conflicts, invalid research options, unsupported/unknown reporter sources, matcher+reporter without phenotyper, and samples without matcher;
+    - wires the `pharmcat` binary to print help/version or fail after successful parse with an explicit "pipeline still being ported" status instead of pretending the run completed.
+  - [x] Port first Java `CliHelper` path-validation behavior used by `PharmCAT`/`BaseConfig`:
+    - `-vcf`, `-pi`, `-ri`, `-S`, and `-sm` now require existing regular files and use Java-style messages for missing paths and directories passed as files;
+    - `-po` outside-call inputs preserve PharmCAT's `"Not a valid file: '"` failure text;
+    - `-def` requires an existing directory and reports Java-style missing/non-directory errors;
+    - `-o` creates missing output directories like `CliHelper.getValidDirectory(..., true)`;
+    - focused tests cover missing files, non-file inputs, missing definition directories, non-directory definitions, output directory creation, and sample-file validation.
+  - [x] Add first Java `Pipeline` output path planner for parsed CLI configs:
+    - derives matcher JSON/HTML/warnings, phenotyper JSON, reporter HTML/JSON/calls-only TSV paths with Java suffix constants;
+    - defaults the base directory from `-o` or the input file directory like `Pipeline.getBaseDir`;
+    - applies Java `generateBasename` behavior for `-bf`, `BaseConfig.getBaseFilename`, multi-sample suffixes, duplicate sample-suffix avoidance, display names, and default reporter titles;
+    - focused tests cover a full matcher->phenotyper->reporter path, independent reporter mode, base filename override, reporter-title override, and sample suffix behavior.
+  - [x] Add first Java `Pipeline` orchestration primitives:
+    - `PipelineMode`, `PipelineStatus`, and `PipelineResult` mirror Java `Pipeline.Mode` and `PipelineResult`;
+    - `PipelineRunPlan` derives Java pre-run metadata from parsed CLI config and output paths;
+    - ports Java `Pipeline.getInputDescription`, batch-display start-line formatting, `-del` intermediate file deletion list, and `.ERROR.txt` failure path naming;
+    - focused tests cover result status/sample fields, verbose batch start output, input descriptions, intermediate cleanup targets, single-sample CLI display suppression, and error-file naming.
+  - [x] Add first Java `Pipeline.call` output-message planner:
+    - ports normal single-sample CLI save messages for matcher JSON/HTML, phenotyper JSON, reporter HTML/JSON, and calls-only TSV;
+    - preserves Java suppression of matcher/phenotyper save messages when `-del` will remove intermediate files;
+    - preserves Java suppression of normal save messages in batch display mode;
+    - includes the Java batch finished-line shape without volatile memory-usage text;
+    - focused tests cover message ordering, reporter-only messages, batch suppression, finished block text, and `-del` output behavior.
+  - [x] Add first Java `Pipeline.call` side-effect helpers:
+    - `delete_intermediate_files` deletes matcher/phenotyper JSON paths with Java `Files.deleteIfExists` semantics and ignores already-missing files;
+    - `write_error_file` writes the Java-planned `<basename>.ERROR.txt` failure artifact path;
+    - focused tests cover deleting existing and missing intermediates plus writing/reading the planned error file.
+  - [ ] Replace the first hand-rolled parser with `clap` or keep it deliberately if Java alias/error parity is easier to preserve after more CLI tests are ported.
+  - [ ] Wire parsed CLI config into the real Rust pipeline once matcher, phenotyper, reporter, and output orchestration are ported end-to-end.
 - [ ] Port error messages and exit codes for documented user-facing failures.
 
-## 8. Test Porting Strategy
+## 9. Test Porting Strategy
 
 - [ ] For each Java test class under `repos/PharmCAT/src/test`, create a matching Rust test module or integration test.
 - [ ] Preserve test intent and fixture coverage even when the Rust implementation structure differs.
@@ -197,8 +816,460 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
 - [ ] Copy only small immutable fixtures into `fixtures/` when direct reuse would make tests brittle.
 - [ ] Add focused Rust unit tests only for internal edge cases discovered while porting.
 - [ ] Track known Java quirks or bugs in a "bug decisions" table before changing behavior.
+- [ ] Keep fixture provenance in each test module: Java test class, fixture path, and expected Java behavior.
+- [ ] Freeze Java bugs that affect output with Rust tests first; make preserve-vs-fix decisions in a dedicated section/commit later.
+- [ ] For every Java parameterized test, preserve the case matrix even if Rust uses a more compact implementation.
+- [ ] Prefer byte/golden comparisons for user-visible files and structured assertions for internal data models.
+- [ ] Add regression tests for every parity bug discovered during the port before fixing it.
+- [ ] Keep ignored or feature-gated parity tests checked in for known failing Java-vs-Rust cases so the remaining work is visible.
+- [ ] Use a predictable naming convention for parity tests:
+  - Java class or fixture name in the Rust test name;
+  - Java resource path in a comment or assertion message;
+  - expected Java branch or quirk called out when behavior is surprising.
+- [ ] Prefer small promoted parity fixtures for normal CI and keep exhaustive/randomized fixture sweeps behind a slower manual gate.
+- [ ] When a Java fixture exposes a reusable `noodles` gap, first add a focused PharmCAT regression test, then decide whether the reusable fix belongs in `repos/noodles` or in a local PharmCAT adapter.
+- [ ] Add env-gated Java parity tests with the same pattern as Kestrel:
+  - no Java execution unless `PHARMCAT_RUN_JAVA_PARITY=1`;
+  - Java reference path provided by `PHARMCAT_JAVA_DIR` or `PHARMCAT_JAR`;
+  - clear failure if the env var is enabled but the reference artifact is missing.
+- [ ] Keep parity normalization explicit and minimal:
+  - allow path, timestamp, and tool-version normalization only when documented;
+  - do not normalize biological/report content unless a Java quirk decision says so.
+- [ ] Every discovered Java-vs-Rust mismatch gets a Rust regression test before the fix, plus a TODO entry pointing to the fixture and Java source path.
+- [ ] Promote parity fixtures in tiers:
+  - unit-level Java fixture parity;
+  - matcher JSON parity;
+  - phenotyper JSON parity;
+  - reporter JSON/TSV/HTML parity;
+  - full CLI parity.
 
-## 9. Java-vs-Rust Parity Harness
+## 9a. Current Handoff
+
+- [x] Latest slice: Java compact-mode genotype-summary drug prefilter parity:
+  - audited Java `HtmlFormat` and `report.hbs` and confirmed Section I `relatedDrugs` stays aggregated across reportable same-gene source reports before `drugsWithRecommendations` filtering;
+  - changed Rust compact-mode `html_drugs_with_recommendations` / `html_drug_tags` to use Java's `GuidelineReport::isReportable` prefilter instead of the broader `DrugReport::isMatched` shortcut;
+  - extended the real ABCG2 guidance regression to prove compact Section I keeps both reportable CPIC `rosuvastatin` and DPWG `allopurinol` after source-owned related-drug aggregation, matching Java `buildGenotypeSummary`.
+- [x] Previous slice: source-owned `ReportGene.relatedDrugs` aggregation parity:
+  - narrowed `ReportContext.apply_related_drug_backlinks` so the public merged `genes` map still receives all central drug backlinks, while preserved source-owned `ReportGene` entries keep the links attached through their own Java-style `GuidelineReport` path;
+  - retained Java `DrugReport` behavior where each guideline's transient `GeneReport`s are linked back only to that drug report before source entries are rebuilt;
+  - extended the real ABCG2 guidance regression to prove the public merged report contains both CPIC `rosuvastatin` and DPWG `allopurinol`, while the CPIC source entry has only `rosuvastatin` and the DPWG source entry has only `allopurinol`.
+- [x] Previous slice: real guidance-source propagation into preserved report genes:
+  - changed `GuidelineReport` construction to clone report genes through a source-aware context helper, stamping `ReportGene.guidance_source` from the real guideline package source;
+  - rebuilt `ReportContext.report_gene_sources` from completed drug/guideline report genes so preserved source entries come from PharmCAT prescribing guidance data, not only synthetic test metadata;
+  - merged repeated same-gene/same-call-source/same-guidance-source entries while retaining Java-style source ordering and related-drug/message aggregation;
+  - added a fixture-backed real-guidance regression using ABCG2, proving the loaded PharmCAT guidance creates CPIC and DPWG source-owned report entries and Section I chooses the CPIC-owned summary.
+- [x] Previous slice: explicit call-source and prescribing-guidance source ordering:
+  - added internal `ReportCallSource` metadata with Java `CallSource` variants `OUTSIDE`, `MATCHER`, and `NONE`, skipped from JSON so Java's public `outsideCall` surface remains stable;
+  - added optional `ReportGene.guidance_source` ownership metadata for CPIC/DPWG/FDA source ordering, also skipped from JSON;
+  - wired outside-call and matcher constructors to set call-source metadata, and added manual builder helpers for focused tests and future pipeline integration;
+  - changed same-gene merge/source ordering to rank by Java call-source order first and prescribing-guidance source order second, preserving CPIC-over-DPWG selection without depending on the `outsideCall` boolean;
+  - added focused regression coverage proving same-gene matcher reports with DPWG input before CPIC still produce a CPIC-first Section I summary while retaining related-drug context from both sources.
+- [x] Previous slice: Java `buildGenotypeSummary` same-gene source preservation:
+  - added a private `ReportContext.report_gene_sources` index that preserves same-gene per-source `ReportGene` entries before the public merged `genes` JSON map is built;
+  - sorted preserved source entries by Java `GeneReport.compareTo` / `CallSource.compare` ordering for the currently modeled call sources, with outside calls before matcher calls;
+  - threaded related-drug backlinks into both the merged map and preserved source entries so Section I can build summaries from source-level reports without losing public JSON compatibility;
+  - changed Section I summary selection to build Java-style per-gene summary clones: first reportable source entry supplies diplotype/display fields, while reportable source entries aggregate related drugs and messages;
+  - added focused regression coverage proving same-gene matcher+outside source entries are preserved, outside source ordering wins the summary fields, and reportable context from both source reports is retained.
+- [x] Previous slice: Java same-gene outside-call summary ordering parity:
+  - ported the next slice of Java `GeneReport.compareTo` / `CallSource.compare` behavior into the current one-report-per-gene Rust merge model;
+  - when an incoming same-gene outside call is merged over an existing matcher call, Rust now prefers the outside-call summary fields like Java's `OUTSIDE`-before-`MATCHER` sorted report set;
+  - kept Java-style aggregation of context fields that survive the first-report summary choice, including messages, related drugs, variant reports, variants of interest, uncalled haplotypes, and undocumented-variation flags;
+  - added focused regression coverage for matcher+outside CYP2D6 merging, proving outside-call lookup/phenotype/activity/source/recommendation diplotypes win while matcher messages, related drugs, and variant context are retained.
+- [x] Previous slice: Java Section I reportable-only genotype-summary row parity:
+  - tightened Section I `summaries` row inclusion to Java `reports.stream().noneMatch(GeneReport::isReportable)` behavior;
+  - removed the temporary lookup-key/source-diplotype-only row heuristic now that current HTML fixtures can model Java-reportable genes directly;
+  - updated the combo-message fixture to be a non-no-data, Java-reportable CYP2B6 gene before expecting Section I combo alerts;
+  - added focused HTML regression coverage proving non-reportable lookup/source-only genes fall into the no-summary branch and do not render genotype-summary rows or called-count text.
+- [x] Previous slice: Java Section I genotype called/total count parity:
+  - added the Java `report.hbs` `Genotypes called: calledGenes / totalGenes` line before the genotype-summary table;
+  - derived `calledGenes` from non-no-data, drug-related, Java-reportable genes, matching Java `HtmlFormat` counting semantics;
+  - derived `totalGenes` from non-no-data report genes plus existing Java-style `noDataGenes`, preserving subset-removed no-data behavior through `definition_genes`;
+  - focused HTML tests cover a real called HLA-B row, a no-data definition gene included in the denominator, and a subset-removed no-data gene excluded from the denominator.
+- [x] Previous slice: Java Section I no-summary fallback/table omission parity:
+  - ported Java `report.hbs` fallback branch when genotype-summary `summaries` is empty;
+  - rendered `No data provided.` when there are no summary rows and no uncallable related genes;
+  - rendered `No genotypes called.` plus the unwrapped `uncallableGenesNote` content when related genes are uncallable;
+  - omitted the genotype-summary table, Section I footnotes, combo alert, and summary messages in the no-summary branch, matching Java template control flow;
+  - focused HTML test covers no-data and uncallable fallback text, Section IV disclaimer comma wording, and table omission.
+- [x] Previous slice: Java genotype-summary combo-call and report-context summary message parity:
+  - ported Java `report.hbs` genotype-summary combo alert placement after Section I footnotes for reportable genes carrying `combo-partial` messages;
+  - added `ReportContext::with_messages` / `messages` for Java-style global report messages;
+  - rendered Java `summaryMessages` as escaped `<div class="alert alert-info {{messageClass}}">` blocks after the combo alert, without Section III PMID linkification;
+  - focused HTML test covers combo alert ordering, summary-message CSS sanitization, HTML escaping, and no PubMed linkification.
+- [x] Previous slice: Java genotype-summary uncallable warning and terminology footnote parity:
+  - filtered Section I genotype-summary rows to display only reportable/current summary-call genes while keeping uncallable genes available in Section III;
+  - ported Java `uncallableGenesNote.hbs` warning for related non-reportable genes, including `gs-uncallable-*` anchors into Section III;
+  - aligned genotype-summary star/dagger/double-dagger footnotes to summary-call genes instead of all report genes;
+  - added Java's CPIC/DPWG terminology footnote and Section IV disclaimer footnote below the genotype summary;
+  - focused HTML tests cover CYP2C19 uncallable warning output, absence from Section I rows, and the terminology/disclaimer footnotes.
+- [x] Previous slice: Java genotype-summary lowest-function component and footnote parity:
+  - ported Java `showComponents` rendering for the current Rust lowest-function model using recommendation diplotypes as `lowestFunctionDiplotype` rows and source diplotypes as `gs-dip_component` rows;
+  - ported `gsLowestFunctionComponents` haplotype-name matching, including Java combination-name splitting and first-row `rowspan` phenotype cell behavior;
+  - added Section I `genotypes-star`, `genotypes-dagger`, and `genotypes-ddagger` footnotes derived from missing variants, gene messages, and unphased calls;
+  - focused HTML tests cover synthetic DPYD component expansion, row-spanning `See Drug Recommendation`, and all three genotype-summary footnotes.
+- [x] Previous slice: Java genotype-summary diplotype row parity:
+  - replaced the remaining plain genotype-summary genotype cell with a Java-style nested diplotype table using `gs-dip` rows;
+  - added Rust `gsCall` parity for unknown calls, inferred-source display, and homozygous component labels on the current report model;
+  - added Rust `gsFunction` parity for one/two allele functionality strings, `N/A`, and lowest-function combination `See Drug Recommendation` handling;
+  - added Rust `gsPhenotype` parity for joined phenotype values, `N/A`, and lowest-function `See Drug Recommendation` handling;
+  - rendered Java genotype-summary missing-variant and undocumented-variation notes for the current one-report-per-gene model;
+  - focused HTML tests cover HLA-B fallback rows, CYP2D6 function/phenotype rows, missing-variant notes, and undocumented-variation summary notes.
+- [x] Previous slice: Java genotype-summary related-drug link/tag parity:
+  - carried Java `AnnotationReport` booleans `dosingInformation`, `alternateDrugAvailable`, and `otherPrescribingGuidance` through Rust JSON/report models;
+  - replaced the placeholder Section I table with a Java-shaped genotype summary table containing `Drugs`, `Gene`, and genotype columns;
+  - rendered `GeneReport.relatedDrugs` as Java-style `<div class="gsDrugs">` drug links, filtered through Java `drugsWithRecommendations` behavior for compact vs extended output;
+  - added compact-mode `drugTags` rendering from matched annotation flags, including Java labels `Alternate Drug`, `Dosing Info`, and `Other Guidance`;
+  - focused HTML test covers real HLA-B/allopurinol summary link and compact-mode `Alternate Drug` tag.
+- [x] Previous slice: Java `DrugLink` / `GeneReport.relatedDrugs` backlink parity:
+  - added Rust `DrugLink` with Java serialized fields `name` and `id` and Java sort order by name then id;
+  - added `ReportGene.related_drugs` serialized as `relatedDrugs`, matching Java's always-present array shape;
+  - populated central `ReportContext` gene backlinks from built `DrugReport`/`GuidelineReport` relationships;
+  - populated transient guideline `report_genes` with the same backlink data so later HTML summary helpers can read the Java field directly;
+  - extended the existing Java-style report JSON test to assert real HLA-B `relatedDrugs` entries for `abacavir` and `allopurinol`.
+- [x] Previous slice: Java Section III compact/extended `geneReports` filtering parity:
+  - retained the initial Section III `geneReports`, `amdGeneCalls`, phase-status, uncalled-haplotype, gene-message, and no-data rendering from the previous slice;
+  - retained the Java `Calls at Positions` table for variant reports with position, RSID, call, reference, related-allele/function, and warnings columns;
+  - retained Java `amdAlleleFunction` behavior over the currently ported report haplotype metadata, including the CYP2C19 `*1` / `rs3758581` exception and `Unassigned` fallback;
+  - retained Java `messageClass` and `messageMessage` helper behavior for AMD gene messages;
+  - corrected Java `sanitizeCssSelector` behavior for Section III anchors/sections, including underscore separators for names like `IFNL3/4`;
+  - retained Java `amdSubtitle` variant-gene behavior using the full matcher-component-haplotype name set;
+  - added `HtmlReportOptions.compact` to mirror Java `HtmlFormat.compact`;
+  - Section III now filters gene reports like Java for the current one-report-per-gene model: extended mode includes all non-no-data gene reports, while compact mode includes only genes related to built drug/guideline reports;
+  - focused tests cover compact-vs-extended filtering with a related uncallable CYP2C19 report and an unrelated synthetic GENEX report.
+- [x] Latest slice: Java compact-mode Section II recommendation prefilter parity:
+  - shared Java `HtmlFormat` compact recommendation visibility between Section I `drugsWithRecommendations`, compact drug tags, Section II recommendation drug selection, and per-source Section II report rows;
+  - refined compact `drugsWithRecommendations` to Java's matched-only recommendation behavior after the reportable-guideline prefilter, so reportable but unmatched drugs become no-guidance candidates rather than Section I links;
+  - retained Java's special CPIC warfarin matched annotation behavior while excluding non-reportable CPIC warfarin from compact recommendation sections;
+  - added `compact_recommendation_drugs_ignore_non_reportable_warfarin_escape` against real guidance to lock the Java `don't use drugReport.isMatch() directly because it escapes warfarin` behavior.
+- [x] Latest slice: Java extended-mode unmatched Section II recommendation parity:
+  - changed Section II recommendation drug selection to mirror Java `recommendations.addAll(recommendationMap.values())` in extended mode;
+  - compact mode still requires matched recommendations, while extended mode includes reportable unmatched/not-called recommendation rows;
+  - added `report_html_string_includes_unmatched_recommendations_only_in_extended_mode_like_java` with a synthetic reportable unmatched CPIC drug to pin the compact-vs-extended split.
+- [x] Latest slice: Java compact-mode `drugsWithoutRecommendations` parity:
+  - added the Java `Drugs With No Guidance` block for compact unmatched reportable drugs;
+  - derived the list from the same Java-style recommendation map split as compact `drugsWithRecommendations`;
+  - extended `report_html_string_includes_unmatched_recommendations_only_in_extended_mode_like_java` to assert compact no-guidance list contents, link text, and extended-mode omission.
+- [x] Latest slice: Java Section II `annotationTags` source-column parity:
+  - added Java `ReportHelpers.annotationTags` behavior to matched recommendation rows;
+  - renders `Alternate Drug`, `Dosing Info`, and `Other Guidance` tags from annotation flags;
+  - preserves Java `No Action` fallback and suppresses source-column tags for CPIC warfarin.
+- [x] Latest slice: Java CPIC warfarin special matched-row parity:
+  - renders CPIC warfarin matched rows with Java's special `colspan="4"` recommendation cell;
+  - includes annotation-level message alerts via Java `rxAnnotationMessages` semantics;
+  - includes the CPIC warfarin flowchart image and suppresses normal implication/recommendation/classification cells for that row.
+- [x] Latest slice: Java FDA `rx-ast` and drug-report footnote parity:
+  - adds Java `Recommendation.isFda()`-style section detection for matched FDA Label/FDA PGx Association reports;
+  - appends Java `rx-ast` links to recommendation cells when an FDA recommendation is present in the drug section;
+  - renders the FDA quotation footnote and drug-report footnote messages at the recommendation-section level, while keeping footnotes out of the top alert list.
+- [x] Latest slice: Java Section II row class/source-value parity:
+  - matched and unmatched Section II rows now use Java `rxAnnotationClass` shape: `{sourceCode}-{sanitizeCssSelector(drug)}`;
+  - FDA PGx Association source labels now use Java `sourceValue` behavior, taking the guideline-name prefix before `:`;
+  - focused synthetic Section II coverage pins CPIC/FDA row classes and FDA Association source display.
+- [x] Latest slice: Java Section II recommendation-cell/classification parity:
+  - removed the Rust-only `<div class="recommendation">` wrapper from non-warfarin recommendation cells so matched rows follow Java `{{{drugRecommendation}}}` output directly;
+  - rendered `drugRecClass` through Java-style `capitalizeNA`, including `n/a` -> `N/A`;
+  - extended the synthetic Section II source-row test to pin the FDA recommendation cell shape, FDA `rx-ast` placement, and absence of the removed wrapper.
+- [x] Latest slice: Java Section II `populationValue` parity:
+  - matched Java `ReportHelpers.populationValue` for matched recommendation rows;
+  - non-FDA sources now render `Population:<br/>` plus Java-style `capitalizeNA(population)`;
+  - FDA PGx Association rows now render the escaped raw population value instead of an empty paragraph;
+  - extended the synthetic Section II source-row test to pin prefixed CPIC population output and unprefixed FDA Association population output.
+- [x] Latest slice: Java Section II matched genotype-list template parity:
+  - matched Java `pluralize "Genotype" genotypes` hint rendering for matched annotations;
+  - matched Java single-vs-multiple genotype list classes: `noBullet mt-0` for one genotype and `noPadding mt-0` for multiple genotypes;
+  - wrapped matched genotype display in Java's `<span class="noWrap">` before inferred footnote markers and debug output;
+  - extended the synthetic Section II source-row test to cover both multiple-genotype CPIC annotations and single-genotype FDA Association annotations.
+- [x] Latest slice: Java Section II phenotype/activity-score map parity:
+  - matched adjacent Java `pluralize "Phenotype" phenotypes` and `pluralize "Activity Score" activityScores` hint rendering;
+  - kept `printRecMap` behavior aligned with Java for one-entry maps (`<p class="...">`) and multi-entry maps (`<dl class="compact mt-0">`);
+  - extended the synthetic Section II source-row test to pin plural phenotype `<dl>` output and singular activity-score `<p>` output.
+- [x] Latest slice: Java Section II `rxImplications` parity:
+  - matched Java's raw single-implication return for matched rows instead of applying `capitalizeNA`;
+  - preserved Java's multi-implication `<ul class="noPadding mt-0">` output with `capitalizeNA` per entry;
+  - extended the synthetic Section II source-row test to pin both the multi-implication CPIC list and the raw single FDA Association implication cell.
+- [x] Latest slice: Java Section II unmatched-row template parity:
+  - audited Rust unmatched-row rendering against Java `report.hbs`;
+  - pinned Java source-cell/list-source markup and no-recommendation colspan copy for reportable unmatched rows;
+  - added a synthetic not-called unmatched drug to cover Java's `rx-no-call` row with `colspan="5"`, omission of source URL superscripts, and compact-mode prefilter exclusion.
+- [x] Latest slice: Java Section II post-table footnote/citation ordering parity:
+  - moved Section II inferred/FDA/drug-report footnotes before citations to match Java `report.hbs`;
+  - kept citation rendering after all recommendation footnote blocks;
+  - extended the synthetic Section II source-row test to assert inferred footnotes and drug-report footnotes appear before the citations block.
+- [x] Latest slice: Java Section II `ReportHelpers.printCitation` parity:
+  - matched Java's `externalHref` citation anchor shape, including `target="_blank"` and `rel="noopener noreferrer"`;
+  - matched Java's citation period, journal/year, and PMID concatenation shape for PMID-backed publications;
+  - extended the synthetic Section II source-row test to pin exact citation `<li>` output with source URL, title, journal, year, and PMID.
+- [x] Latest slice: Java Section II/report-level template parity:
+  - removed the Rust-only section-level `reportVariants` HTML block because current Java `report.hbs` does not render `DrugReport.reportVariants` directly;
+  - kept report-as-genotype variants visible through the Java genotype helper surface as highlighted variant text;
+  - matched Java `externalHref` attributes for inferred-genotype PharmCAT documentation footnote links.
+- [x] Latest slice: Java Section III `messageMessage` parity for extra-position notes:
+  - audited Java `report.hbs` message rendering contexts against Rust summary, Section II, and Section III renderers;
+  - routed Section III "Other Positions of Interest" extra-position notes through the Java-style `messageMessage` helper;
+  - extended the Section III allele-match-data HTML test to pin PMID linkification inside extra-position warning notes.
+- [x] Latest slice: Java Section III calls-at-positions missing-cell parity:
+  - audited Java calls-at-positions and other-positions tables against Rust Section III HTML rendering;
+  - confirmed existing Rust output matches Java's distinct missing-cell markup for primary calls and other positions;
+  - extended the Section III allele-match-data HTML test to pin primary `<div class="callMessage">Missing</div>` cells and other-position `<em>missing</em>` cells.
+- [x] Latest slice: Java `ReportHelpers.formatCall` wrapping parity:
+  - audited Java `formatCall`, `variantAlleles`, and `referenceAllele` against Rust Section III call/reference formatting;
+  - confirmed Rust already wraps slash-separated long calls with Java's 9-character chunks and appends phase-set suffixes after wrapping;
+  - extended the Section III allele-match-data HTML test to pin long call wrapping, slash separator placement, phase-set suffix placement, and long reference allele wrapping.
+- [x] Latest slice: Java Section III `amdAlleleFunction` edge-case parity:
+  - matched Java's case-insensitive `rs3758581` exception for CYP2C19 `*1` allele-function rendering;
+  - preserved Java's CYP2C19 `*1` suppression for other variants;
+  - added focused helper coverage for specified functions, `n/a`/unspecified functions, and missing function-map entries falling back to `Unassigned`.
+- [x] Latest slice: Java Section III phenotype-backed function-map parity:
+  - added Rust `GenePhenotype.formatted_function_score_map` to mirror Java `GenePhenotype.makeFormattedFunctionScoreMap`;
+  - threaded a skipped `ReportGene.allele_function_map` through report construction and merge behavior so HTML `amdAlleleFunction` uses phenotype data like Java `HtmlFormat`;
+  - added a real UGT1A1 combination fixture regression proving related variant alleles render phenotype-backed functions instead of report-haplotype-only `Unassigned` fallbacks.
+- [x] Latest slice: Java Section III activity-score function-map parity:
+  - audited Java `HaplotypeRecord.toFormattedFunction` and `GenePhenotype.makeFormattedFunctionScoreMap` for activity-score alleles;
+  - confirmed Rust preserves Java's `Activity Value X (function)` formatting for specified activity values and plain function output for unspecified values;
+  - added a real CYP2D6 phenotype fixture regression proving Section III calls-at-positions allele-function rows render `Activity Value 0.25 (Decreased function)` for `*10`.
+- [x] Latest slice: Java Section III `amdNoCall` / `amdPhaseStatus` helper parity:
+  - audited Java `ReportHelpers.amdNoCall` and `ReportHelpers.amdPhaseStatus` against Rust Section III helpers;
+  - fixed `html_amd_no_call` so Java `CallSource.NONE` always renders the no-call warning block, matcher reports no-call only when variants are empty or all missing, and outside calls never use the no-call block;
+  - added focused helper coverage for NONE, MATCHER, OUTSIDE, empty variants, all-missing variants, called variants, outside-call unavailable phase status, phased calls, phase-set calls, and effectively-phased-but-not-phased calls.
+- [x] Latest slice: Java Section III uncalled-haplotype helper parity:
+  - audited Java `ReportHelpers.amdHasUncalledHaps`, `amdTotalMissingVariants`, `amdTotalVariants`, and `amdUncalledHaps` against Rust Section III helpers;
+  - fixed `html_amd_uncalled_haps` to sort output with PharmCAT's haplotype-name comparator instead of Rust string order, matching Java `GeneReport`'s `TreeSet<>(HaplotypeNameComparator)`;
+  - added focused helper coverage for empty uncalled haplotypes, missing-variant counts, and Java-style display order across `Any`, numeric star alleles, and `Unknown`.
+- [x] Latest slice: Java Section III `amdMessages` filtering/order parity:
+  - audited Java `MessageAnnotation.isMessage`, `isExtraPositionNote`, `ReportHelpers.amdMessages`, `amdExtraPositionNotes`, and `messageMessage` against Rust Section III message rendering;
+  - replaced derived `MessageAnnotation` ordering with Java `compareTo` order: rule name, version, exception type, message, then match logic;
+  - added focused helper coverage proving regular AMD messages exclude footnotes, extra-position notes, and report-as-genotype messages, while PMID linkification and message classes stay Java-compatible.
+- [x] Latest slice: Java Section II/report message ordering parity:
+  - audited Java `Recommendation` message and footnote collection paths for drug reports, annotation messages, and post-table footnotes;
+  - extended the Section II synthetic recommendation fixture to prove Java `MessageAnnotation.compareTo` order for same-name drug banners, CPIC warfarin annotation messages, and drug-report footnotes;
+  - pinned Java placement of drug-report footnotes before citations while keeping footnotes out of top alert blocks.
+- [x] Latest slice: Java report JSON message ordering parity:
+  - audited serialized `GeneReport`, `DrugReport`, and `AnnotationReport` message arrays against Java `TreeSet<MessageAnnotation>` ordering;
+  - added synthetic JSON regression coverage with comparator-sensitive same-name messages across all three surfaces;
+  - proved report JSON emits `ambiguity`, `footnote`, then `note` messages by Java `MessageAnnotation.compareTo`.
+- [x] Latest slice: Java report JSON annotation ordering parity:
+  - audited Java `AnnotationReport.compareTo`, `Genotype.compareTo`, `GuidelineReport.compareTo`, and `DrugReport.compareTo` against Rust report ordering;
+  - fixed Rust `AnnotationReport` ordering to include Java's `genotypes` first and `messages` before `localId`;
+  - added synthetic JSON regression coverage proving annotation arrays sort by genotype and message order instead of Rust-only local IDs.
+- [x] Latest slice: Java report JSON recommendation genotype/diplotype ordering parity:
+  - audited Java `Genotype.makeGenotypes`, `Genotype.compareTo`, and `Diplotype.compareTo` against Rust recommendation genotype construction and report diplotype sorting;
+  - normalized `RecommendationGenotype::from_report_genes` to Java `GeneReport` ordering before lookup-key construction and JSON serialization;
+  - extended JSON regression coverage for multi-gene genotype order, Java lookup-key cross-product order, and serialized inferred-source diplotype order.
+- [x] Latest slice: Java `GeneReport` JSON field-shape parity:
+  - audited Java `GeneReport` `@Expose` fields and `DataSerializer.GSON` settings (`serializeNulls`, `excludeFieldsWithoutExposeAnnotation`) against Rust `ReportGene` serialization;
+  - added Java metadata fields (`alleleDefinitionVersion`, `alleleDefinitionSource`, `phenotypeVersion`) and Java `callSource` enum serialization while keeping Rust matching/helper fields internal;
+  - replaced derived `ReportGene` JSON with a Java-field serializer and pinned null fields, empty exposed collections, and absence of Rust-only fields such as `lookupKey`, `phenotypes`, `activityScore`, `outsideCall`, and mismatch helpers.
+- [ ] Record the latest local gate results after each substantial slice:
+  - `cargo fmt --all --check`;
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+  - focused Rust tests for the touched module;
+  - Java Gradle tests or parity tests when relevant.
+- [x] Latest local gate results:
+  - `cargo fmt --all --check` passed.
+  - `cargo test -p pharmcat slco1b1_custom_fallback --all-features` passed: 3 passed.
+  - `cargo test -p pharmcat standard_report_with_definition_invokes_slco1b1 --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat report_gene_adds_vcf_warnings --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat variant_report_ --all-features` passed: 2 passed.
+  - `cargo test -p pharmcat report_as_genotype --all-features` passed: 2 passed.
+  - `cargo test -p pharmcat gene_call_warnings --all-features` passed: 2 passed.
+  - `cargo test -p pharmcat report_gene_from_standard --all-features` passed: 5 passed.
+  - `cargo test -p pharmcat standard_report_marks_undocumented --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat static_ --all-features` passed: 2 passed.
+  - `cargo test -p pharmcat matcher_metadata --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat gene_message_matching --all-features` passed: 2 passed.
+  - `cargo test -p pharmcat drug_messages --all-features` passed: 3 passed.
+  - `cargo test -p pharmcat publication_sorting --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat report_context_serializes_java_style_report_json_fields --all-features` passed: 1 passed, including Java `relatedDrugs` JSON/backlink assertions.
+  - `cargo test -p pharmcat html_java_css_selector --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat html_amd_subtitle --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat filters_section_iii --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat report_html_string_writes_minimal_report_from_current_report_context --all-features` passed: 1 passed, including genotype-summary related drug links, compact-mode drug tags, and Java-style fallback diplotype row.
+  - `cargo test -p pharmcat merge_report_gene_prefers_outside_summary_fields_like_java_gene_report_order --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat genotype_summary_uses_preserved_same_gene_source_reports_like_java_build_genotype_summary --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat genotype_summary_orders_same_gene_matcher_sources_cpic_before_dpwg --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat report_context_populates_guidance_source_from_real_guideline_packages --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat report_context_merges_annotated_outside_calls_for_same_gene_like_java_add_outside_call --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat html_amd_allele_function_matches_java_helper_edge_cases --all-features` passed: 1 passed, including CYP2C19 `*1` suppression, case-insensitive `rs3758581`, specified functions, and `Unassigned` fallbacks.
+  - `cargo test -p pharmcat html_amd_calls_at_positions_uses_java_function_map_for_combination_alleles --all-features` passed: 1 passed, including phenotype-backed UGT1A1 combination fixture function-map entries and related-variant allele functions.
+  - `cargo test -p pharmcat html_amd_calls_at_positions_uses_activity_value_function_map --all-features` passed: 1 passed, including Java CYP2D6 phenotype-backed activity-score function formatting in Section III allele-function rows.
+  - `cargo test -p pharmcat html_amd_no_call_and_phase_status_match_java_helper_edges --all-features` passed: 1 passed, including Java `amdNoCall` source/variant edge cases and `amdPhaseStatus` outside/phased/phase-set/effectively-phased output.
+  - `cargo test -p pharmcat html_amd_uncalled_haps_match_java_helper_edges --all-features` passed: 1 passed, including Java missing-variant count and haplotype-comparator display order for Section III uncalled haplotypes.
+  - `cargo test -p pharmcat html_amd_messages_match_java_filtering_order_and_message_rendering --all-features` passed: 1 passed, including Java AMD message filtering, `MessageAnnotation.compareTo` order, extra-position filtering, message class sanitization, and PMID linkification.
+  - `cargo test -p pharmcat report_context_serializes_message_sets_in_java_compare_to_order --all-features` passed: 1 passed, including Java `MessageAnnotation.compareTo` JSON order for `GeneReport`, `DrugReport`, and `AnnotationReport` messages.
+  - `cargo test -p pharmcat report_context_serializes_annotations_in_java_compare_to_order --all-features` passed: 1 passed, including Java `AnnotationReport.compareTo` genotype-first and message-before-localId JSON ordering.
+  - `cargo test -p pharmcat recommendation_genotype_serializes_report_genes_in_java_order --all-features` passed: 1 passed, including Java multi-gene genotype report order and lookup-key cross-product order.
+  - `cargo test -p pharmcat report_diplotype_sorting_matches_java_comparable_shape --all-features` passed: 1 passed, including serialized inferred-source diplotype ordering.
+  - `cargo test -p pharmcat report_context_serializes_java_style_report_json_fields --all-features` passed: 1 passed, including Java `GeneReport` exposed field presence/nulls/empty collections and Rust-only field omission.
+  - `cargo test -p pharmcat report_html_string_groups_source_rows_like_java_recommendation_model --all-features` passed: 1 passed, including Java `annotationTags`, FDA `rx-ast`, drug-report footnotes, `MessageAnnotation.compareTo` ordering for drug banners/footnotes/warfarin annotation messages, `rxAnnotationClass`, FDA Association `sourceValue`, direct recommendation-cell output, `capitalizeNA` classification rendering, Java `populationValue` output, matched genotype-list hint/class/wrapper parity, phenotype/activity-score hint/map parity, `rxImplications` single/multiple parity, unmatched source/no-recommendation row parity, Java post-table footnote-before-citation ordering, exact `printCitation` anchor/journal/year/PMID output, and Java `externalHref` attributes for inferred-genotype documentation footnotes.
+  - `cargo test -p pharmcat report_html_string_renders_drug_messages_and_report_as_genotype_like_java_report_template --all-features` passed: 1 passed, including CPIC warfarin special matched row, Java report-as-genotype highlighted variant output, and omission of the Rust-only `reportVariants` block.
+  - `cargo test -p pharmcat report_html_string_renders_initial_section_iii_allele_match_data_like_java --all-features` passed: 1 passed, including Java `messageMessage` PMID linkification for gene messages and extra-position notes, primary calls-at-positions missing-cell markup, other-position missing-cell markup, and Java `formatCall` long-call/reference wrapping.
+  - `cargo test -p pharmcat report_html_string_includes_unmatched_recommendations_only_in_extended_mode_like_java --all-features` passed: 1 passed, including compact `Drugs With No Guidance` and Java not-called unmatched-row rendering.
+  - `cargo test -p pharmcat report_html_string --all-features` passed: 12 passed, including Java-style reportable-only summary rows, genotype called/total counts, no-summary fallbacks, combo/context summary alerts, uncallable warning, terminology/disclaimer footnotes, extended-mode unmatched recommendation sections, compact no-guidance, source-column annotation tags, CPIC warfarin flowchart rendering, FDA `rx-ast`, drug-report footnote rendering, Java row class/source labels, direct recommendation-cell output, `capitalizeNA` classification rendering, Java `populationValue` output, matched genotype-list hint/class/wrapper parity, phenotype/activity-score hint/map parity, `rxImplications` single/multiple parity, unmatched-row template parity, Java post-table footnote-before-citation ordering, exact `printCitation` anchor/journal/year/PMID output, Java report-as-genotype highlighted variant output, omission of the Rust-only `reportVariants` block, Java `externalHref` attributes for inferred-genotype documentation footnotes, Java `messageMessage` PMID linkification for Section III extra-position notes, Java Section III missing-call cell markup, and Java `formatCall` long-call/reference wrapping.
+  - `cargo test -p pharmcat compact_recommendation_drugs_ignore_non_reportable_warfarin_escape --all-features` passed: 1 passed.
+  - `cargo test -p pharmcat phenotype:: --all-features` passed: 30 passed.
+  - `cargo test -p pharmcat report:: --all-features` passed: 83 passed.
+  - `cargo fmt --all --check` passed.
+  - `cargo clippy -p pharmcat --all-targets --all-features -- -D warnings` passed.
+  - `cargo test -p pharmcat --all-features` not rerun for this slice; previous full-suite baseline was 178 passed.
+  - `git diff --check` passed.
+- [ ] Record exact Java/Rust/parity counts in this section once the clean baselines exist.
+- [x] Next unblocked slice: continue reporter HTML parity by porting Java recommendation/drug rendering expectations for drug `messages`, report-as-genotype `variants`, and citation display now that the JSON data surface is present.
+- [x] Next unblocked slice: keep replacing the temporary HTML bridge with Java `Recommendation`/`report.hbs` parity, starting with source grouping, no-recommendation sections, footnotes, and the remaining recommendation helper output.
+- [x] Next unblocked slice: continue Java `Recommendation`/`ReportHelpers` HTML parity by porting footnotes, inferred genotype markers, reportable-vs-matched `GeneReport` state, and richer genotype/phenotype/activity-score helper rendering.
+- [x] Next unblocked slice: continue Java `Recommendation`/`ReportHelpers` HTML parity by porting footnotes, inferred genotype markers, reportable-vs-matched `GeneReport` state, and fuller `rxGenotype`/`rxGenotypeDebug`/`rxUnmatchedDiplotypes` helper output.
+- [x] Next unblocked slice: continue Java `ReportHelpers` HTML parity by porting fuller `rxGenotype`, `rxGenotypeDebug`, `rxUnmatchedDiplotypes`, and reportable-vs-matched `GeneReport` state for unmatched rows.
+- [x] Next unblocked slice: continue Java `ReportHelpers` HTML parity by porting `rxGenotypeDebug`, `rxUnmatchedDiplotypes`, long-label line-breaking/homozygous annotations, and reportable-vs-matched `GeneReport` state for unmatched rows.
+- [x] Next unblocked slice: continue Java `ReportHelpers` HTML parity by porting `rxUnmatchedDiplotypes`, long-label line-breaking/homozygous annotations, and reportable-vs-matched `GeneReport` state for unmatched rows.
+- [x] Next unblocked slice: continue Java `HtmlFormat`/`ReportHelpers` HTML parity by threading the `noDataGenes` helper input into recommendation rendering and by adding Java `listSources` source URL superscripts on unmatched rows.
+- [x] Next unblocked slice: continue Java `HtmlFormat` HTML parity by deriving `noDataGenes` from report-context/gene-definition/subset state instead of only accepting the helper input through `HtmlReportOptions`, then render the Java AMD no-data message block.
+- [x] Next unblocked slice: continue Java Section III allele-match-data HTML parity by porting `geneReports` summary links, `amdGeneCalls`, `amdPhaseStatus`, uncalled-haplotype/missing-variant text, and gene-level AMD message rendering.
+- [x] Next unblocked slice: continue Java Section III allele-match-data HTML parity by porting calls-at-positions tables, variant warning rows, allele-function fallback lists, and extra-position notes for the current report-gene surface.
+- [x] Next unblocked slice: continue Java Section III allele-match-data HTML parity by replacing the current allele-function fallback with real function-map lookups and adding PMID linkification for `messageMessage`.
+- [x] Next unblocked slice: continue Java Section III allele-match-data HTML parity by porting `amdSubtitle` variant-gene nuance.
+- [x] Next unblocked slice: continue Java Section III allele-match-data HTML parity by matching full compact/extended `geneReports` filtering for the current one-report-per-gene model.
+- [x] Next unblocked slice: port Java `DrugLink` / `GeneReport.relatedDrugs` backlinks now that `GeneReport` exists.
+- [x] Next unblocked slice: thread `ReportGene.relatedDrugs` through genotype-summary rows and Java drug-tag links.
+- [x] Next unblocked slice: continue Java genotype-summary / Section III HTML parity by replacing the remaining placeholder genotype-summary genotype cells with Java `gsCall`, `gsFunction`, `gsPhenotype`, missing-variant, and undocumented-variation rendering.
+- [x] Next unblocked slice: continue Java genotype-summary HTML parity by porting lowest-function component expansion (`showComponents` / `gsLowestFunctionComponents`) and Section I footnotes (`genotypes-star`, `genotypes-dagger`, `genotypes-ddagger`) for the current report model.
+- [x] Next unblocked slice: continue Java genotype-summary HTML parity by adding uncallable-genes summary warning rendering and CPIC/DPWG terminology footnotes.
+- [x] Next unblocked slice: continue Java genotype-summary HTML parity by porting combo-call summary alerts and report-context summary messages, then revisit multi-report-per-gene summary merging if the Rust report model grows that Java surface.
+- [x] Next unblocked slice: continue Java Section I/report.hbs parity by adding the no-summary fallback states (`No genotypes called` / `No data provided`) and matching the genotype-summary table omission behavior before moving deeper into multi-report-per-gene summary merging.
+- [x] Next unblocked slice: continue Java Section I/report.hbs parity by adding the `Genotypes called: calledGenes / totalGenes` summary line and reconciling Rust's current one-report-per-gene summary heuristic with Java's reportable-only `summaries` model.
+- [x] Next unblocked slice: continue Java Section I/report.hbs parity by tightening `summaries` row inclusion to Java reportable-only behavior while preserving documented Rust synthetic-test coverage for current one-report-per-gene fixtures.
+- [x] Next unblocked slice: continue Java Section I genotype-summary parity by porting Java multi-report-per-gene source merging behavior in `buildGenotypeSummary`, especially CPIC-over-DPWG ordering, reportable-only related drug aggregation, and first-report summary field selection.
+- [x] Next unblocked slice: continue Java `buildGenotypeSummary` parity by preserving separate same-gene per-source report entries, so CPIC-over-DPWG reportable related-drug aggregation and first-report field selection can be represented without merge-time loss.
+- [x] Next unblocked slice: extend the preserved same-gene source model with an explicit Rust call-source enum (`NONE`, `MATCHER`, `OUTSIDE`) and prescribing-guidance source ownership so CPIC-over-DPWG ordering can be modeled independently from outside-vs-matcher ordering.
+- [x] Next unblocked slice: thread `ReportGene.guidance_source` through real report construction from guideline packages so source ownership is populated by PharmCAT data instead of only synthetic tests, then add a fixture-backed CPIC/DPWG summary-order parity case.
+- [x] Next unblocked slice: continue reporter parity by making source-owned `ReportGene.relatedDrugs` aggregation match Java per-source `GeneReport` ownership more tightly, instead of applying all central backlinks to every preserved source entry.
+- [x] Next unblocked slice: audit Section I compact-mode drug filtering for genes with multiple preserved source reports; result: Java first applies the reportable-guideline prefilter, then includes only matched recommendations in compact `drugsWithRecommendations`, rather than narrowing solely to the selected report source.
+- [x] Next unblocked slice: continue reporter parity by applying Java compact-mode reportable-guideline filtering to Section II recommendation drug ordering/rendering, so recommendation sections and Section I `drugsWithRecommendations` are derived from the same Java prefiltered recommendation map.
+- [x] Next unblocked slice: continue Java Section II recommendation parity by auditing extended-mode unmatched recommendation sections and row rendering against Java `Recommendation` / `ReportHelpers`, especially whether Rust should include non-matched recommendations in extended HTML like Java `recommendations.addAll(recommendationMap.values())`.
+- [x] Next unblocked slice: continue compact Java Section II parity by adding the `drugsWithoutRecommendations` / "Drugs With No Guidance" block for compact unmatched reportable drugs, using the same Java recommendation map split that now drives `drugsWithRecommendations`.
+- [x] Next unblocked slice: continue Java `Recommendation` template parity by auditing remaining Section II source-column details, especially Java `annotationTags`, CPIC warfarin flowchart/message row, FDA `rx-ast` footnote, and recommendation footnote messages collected from drug reports.
+- [x] Next unblocked slice: continue Java `Recommendation` template parity with CPIC warfarin's special matched row, including annotation messages and the flowchart image, then port FDA `rx-ast` and drug-report footnote message rendering.
+- [x] Next unblocked slice: continue Java `Recommendation` template parity by adding FDA `rx-ast` recommendation links/footnote and drug-report footnote message rendering collected from Section II reports.
+- [x] Next unblocked slice: continue Java Section II template parity by auditing final row-shape differences against `report.hbs`, especially Handlebars class names (`rxAnnotationClass`), `sourceValue` display nuances, `capitalizeNA` classification output, and whether remaining recommendation HTML wrappers should be removed to match Java exactly.
+- [x] Next unblocked slice: continue Java Section II template parity by tightening classification and recommendation-cell output against `report.hbs`, especially `capitalizeNA` classification behavior and whether the current Rust `<div class="recommendation">` wrapper should be removed for exact Java HTML.
+- [x] Next unblocked slice: continue Java Section II template parity by matching `populationValue` output against `ReportHelpers.populationValue`, especially Java's `Population:<br/>` prefix for non-FDA rows and its omission for FDA Association rows.
+- [x] Next unblocked slice: continue Java Section II matched genotype-list template parity by matching Java `pluralize "Genotype" genotypes` and the `<ul class="{{#if (moreThanOne genotypes) }}noPadding{{else}}noBullet{{/if}} mt-0">` class split for single-vs-multiple genotype annotations.
+- [x] Next unblocked slice: continue Java Section II matched row template parity by matching adjacent `pluralize "Phenotype" phenotypes`, `pluralize "Activity Score" activityScores`, and `printRecMap` output details for one-vs-many maps.
+- [x] Next unblocked slice: continue Java Section II matched row template parity by auditing `rxImplications`, especially Java's raw single-implication return versus Rust's current `capitalizeNA` handling and multi-implication list output.
+- [x] Next unblocked slice: continue Java Section II unmatched-row template parity by auditing `report.hbs` unmatched rows, especially source/link rendering, `notCalled` colspan behavior, genotype hint/list output, and no-recommendation copy.
+- [x] Next unblocked slice: continue Java Section II post-table template parity by moving/auditing inferred/FDA/drug footnotes before citations, matching `report.hbs` ordering and `printCitation` output.
+- [x] Next unblocked slice: continue Java Section II citation parity by auditing `ReportHelpers.printCitation` output exactly, especially URL selection, punctuation, journal/year/PMID formatting, and escaping.
+- [x] Next unblocked slice: continue Java Section II/report template parity by auditing `reportVariants`, message block placement, and remaining post-table/report-level ordering against `report.hbs`.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing remaining `messageMessage` / raw-vs-escaped message rendering sites across Section I, Section II, and Section III against `report.hbs`.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III calls-at-positions table cell whitespace, header widths, missing-call text, warnings, and allele/function list formatting against `report.hbs` and `ReportHelpers`.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing `ReportHelpers.formatCall` long-call wrapping for calls and reference alleles, including slash-separated long alleles and phase-set suffix placement.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III `amdAlleleFunction` edge cases, especially unassigned functions, CYP2C19 `*1` suppression except `rs3758581`, and combination allele function-map behavior.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III combination allele function-map behavior against real combination fixtures and `amdAlleleFunction` output.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing activity-score gene `makeFormattedFunctionScoreMap` output in Section III allele-function rows, especially `Activity Value X (function)` formatting.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III `amdNoCall` and `amdPhaseStatus` edge cases against real no-call, phased, and effectively-phased matcher fixtures.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III `amdHasUncalledHaps`, `amdTotalMissingVariants`, and `amdUncalledHaps` output against no-call and partial-call fixtures.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing Section III `amdMessages` filtering/order and `messageMessage` rendering for regular gene messages versus extra-position messages.
+- [x] Next unblocked slice: continue Java HTML report parity by auditing `MessageAnnotation.compareTo` effects on Section II drug-footnote/message ordering and report-level message aggregation.
+- [x] Next unblocked slice: continue Java report JSON parity by auditing message ordering in serialized `GeneReport`, `DrugReport`, and `AnnotationReport` JSON surfaces now that `MessageAnnotation.compareTo` is explicit.
+- [x] Next unblocked slice: continue Java report JSON parity by auditing serialized `DrugReport` and `GuidelineReport` ordering for multi-source/multi-drug contexts against Java `compareTo` behavior.
+- [x] Next unblocked slice: continue Java report JSON parity by auditing serialized recommendation genotype/diplotype ordering against Java `Genotype` and `Diplotype.compareTo`, especially multi-gene genotype arrays and inferred diplotype fields.
+- [x] Next unblocked slice: continue Java report JSON parity by auditing `ReportGene` serialization field presence/default omission against Java GSON `@Expose` output, especially skipped empty collections and transient/source-only fields.
+- [x] Java `GeneReport` JSON parity: replace the temporary empty `matcherComponentHaplotypes` behavior for lowest-function true diplotype calls with Java `DiplotypeFactory.makeComponentDiplotypes`-style component `ReportDiplotype` serialization. Covered by real DPYD and RYR1 report tests plus `cargo test -p pharmcat report_gene_from_ -- --nocapture`.
+- [x] Java `GeneReport` JSON parity: populate allele-definition and phenotype version/source metadata from real lowest-function matcher inputs via definition-aware DPYD/RYR1 report constructors. Covered by real DPYD and RYR1 report tests plus `cargo test -p pharmcat report_gene_from_ -- --nocapture`.
+- [x] Java `GeneReport` JSON parity: thread definition-aware lowest-function constructors into the higher-level matcher-result report dispatcher and assert DPYD/RYR1 matcher variant reports, chromosome/phasing metadata, and reference-allele message behavior. Covered by real DPYD and RYR1 report tests plus `cargo test -p pharmcat report_gene_from_ -- --nocapture`.
+- [x] Java `GeneReport` / reporter JSON parity: add a batch report-building API that converts multiple matcher `GeneCallResult`s plus definitions/phenotypes into a `ReportContext`, using `ReportGene::from_gene_call_result_with_definition` for per-gene conversion. Covered by mixed real CYP3A5/DPYD/RYR1 context tests plus `cargo test -p pharmcat report_context_from_gene_call_results -- --nocapture`.
+- [x] Reporter/pipeline parity: wire `ReportContext::from_gene_call_results_with_definitions` into the first end-to-end Rust pipeline helper from VCF-derived matcher calls to reporter JSON/HTML/TSV outputs. Covered by a real CYP3A5 VCF fixture that writes JSON/HTML/TSV plus `cargo test -p pharmcat run_reporter_from_vcf -- --nocapture`.
+- [x] Reporter/pipeline parity: thread VCF warning messages from `run_reporter_from_vcf` into generated `ReportGene` variant reports before `ReportContext` construction. Covered by a real CYP3A5 definition-position warning fixture plus `cargo test -p pharmcat run_reporter_from_vcf -- --nocapture`.
+- [x] Reporter/pipeline parity: expand `run_reporter_from_vcf` to a multi-gene VCF/definition fixture that exercises standard CYP3A5 and lowest-function DPYD/RYR1 routing in one run, including warning propagation. Covered by `cargo test -p pharmcat run_reporter_from_vcf -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: wire parsed CLI config and Java-style output plans into the ported full `-vcf` matcher + phenotyper + reporter path, with explicit unsupported-stage errors for paths not yet ported. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: emit matcher JSON/HTML/warnings and phenotyper JSON intermediates on the full `-vcf` path. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: tighten matcher JSON toward Java `ResultSerializer` result shape for metadata, top-level VCF warnings, diplotype haplotypes, lowest-function `haplotypeMatches`, variants, variants of interest, and empty uncallable-haplotype sets. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: serialize matcher warnings as Java-style `MessageAnnotation` objects and remove the temporary Rust-only `dpydHapB3Warnings` matcher JSON field. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: align matcher `matchData` JSON with Java exposed fields for undocumented-variation reference treatment, phasing, phase-set maps, homozygosity/effective phasing, and missing-position lists, while removing the Rust-only `haploid` field. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: align matcher `NamedAllele` JSON with Java exposed fields and remove Rust-only definition/matcher internals from nested haplotype JSON. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: derive matcher `uncallableHaplotypes` from definition haplotype names minus marshalled `MatchData` haplotype names like Java `ResultBuilder.initGeneCall`; audit confirmed current `VariantLocus` serializer fields already match Java `@Expose`. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: align matcher metadata sample ID/timestamp/null sampleProps fields with Java `Metadata`. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: serialize DPYD HapB3 `warn.alleleCount` with Java's dynamic count/rsid message text. Covered by `cargo test -p pharmcat dpyd_hap_b3 -- --nocapture` and `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: ingest Java triplet-style sample metadata TSV files into matcher metadata `sampleProps` for the selected sample. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: replace the temporary matcher HTML table with the Java `ResultSerializer`/`template.html` shell plus per-gene diplotype, variant-header, VCF-call, matched-haplotype, and missing-position rendering. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: retain VCF REF/ALT allele lists on matcher sample alleles and render Java's matcher HTML `VCF REF,ALTs` row. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: render Java matcher HTML unmatched haplotype rows when no haplotypes match, and render missing-tag-position notes for called haplotypes with missing definition positions. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: render matcher HTML warning paragraphs with the same Java dynamic `MessageAnnotation` text used by matcher JSON, and add an internal renderer option matching Java `ResultSerializer.alwaysShowUnmatchedHaplotypes(true)`. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: render matcher HTML through a Java `haplotype/template.html`-shaped shell with Java-style placeholder substitution and final `println` newline behavior. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: match Java `ResultSerializer.printAllele` sparse haplotype/sequence row cell emission, including row class, cell highlight, and bolding behavior. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: match Java `ResultSerializer.printAllele` raw row label and allele-cell text behavior for haplotype/sequence rows. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Reporter/CLI pipeline parity: render matcher HTML haplotype cells from Java `NamedAllele.getPermutations().pattern()` semantics, including `.*?` missing alleles, one-letter IUPAC regex expansion, repeat-wobble grouping, and late backslash stripping in `printAllele`-equivalent rows. Covered by `cargo test -p pharmcat pipeline::tests -- --nocapture`.
+- [x] Java test inventory: create `docs/test-status.md` with the initial Java `*Test.java` class inventory, JUnit annotation counts, Rust owner modules, and conservative status labels. Verified by inventory commands in the document.
+- [x] Java test inventory: expand `haplotype/NamedAlleleMatcherTest` into a 42-method status table in `docs/test-status.md`, including fixture/focus notes, closest Rust owner tests, conservative coverage status, and concrete next actions. Verified by `awk` method extraction from the Java source.
+- [x] Java `NamedAlleleMatcherTest.testMismatchedRefAlleleWarnings`: add definition-aware VCF allele extraction, discard rows whose VCF REF differs from the loaded definition REF, emit Java-style warnings for `NamedAlleleMatcher-mismatchedRefAllele.*`, and wire the production reporter pipeline through the same adapter.
+- [x] Java `NamedAlleleMatcherTest.sortException`: port `NamedAlleleMatcher-sortError.vcf` as a Rust matcher fixture over the main definitions, including Java 34-warning multimap size and CYP2D6 diplotype-count regression coverage.
+- [x] Java `NamedAlleleMatcherTest` partial-reference fixture group: port `testPartialReferenceUnphased`, `testPartialReferencePhased`, and `testPartialReferenceDouble` into Rust with direct CYP2B6 fixture-backed matcher tests.
+- [x] Java `NamedAlleleMatcherTest.testUnknownAltMultisample`: port the exact RYR1 multisample selected-sample fixture and add a VCF header compatibility regression for `FORMAT/FT Number=.`.
+- [x] Java `NamedAlleleMatcherTest.testDiplotypeMatcher`: port the exact DPYD checked-in fixture as a ten-iteration Rust determinism/no-call regression test and align DPYD no-HapB3 fallback handling with Java.
+- [x] Java `NamedAlleleMatcherTest.testDpydEffectivelyPhased`: port the generated DPYD `Reference/c.62G>A` scenario and assert Java diplotype and haplotype names.
+- [x] Java `NamedAlleleMatcherTest.testDpydEffectivelyPhased2`: port the generated DPYD multi-component effectively-phased scenario and preserve Java combination partial suppression by retaining available marshalled core positions.
+- [x] Java `NamedAlleleMatcherTest.testDpydPhased`: port the generated phased DPYD c.62/c.3067 scenario and assert Java diplotype/haplotype names.
+- [x] Java `NamedAlleleMatcherTest.testDpydUnPhased`: port the generated unphased DPYD c.62/c.3067 scenario and assert Java haplotype fallback names.
+- [x] Java `NamedAlleleMatcherTest.testDpydPhasedDouble`: port the generated phased DPYD homozygous c.62/c.3067 plus HapB3 scenario and assert Java diplotype/haplotype names.
+- [x] Java `NamedAlleleMatcherTest.testDpydHomozygous`: port the generated phased DPYD homozygous c.62/c.3067 scenario and assert Java diplotype/haplotype names.
+- [x] Java `NamedAlleleMatcherTest.testDpydEffectivelyPhasedCombination`: port the NA18973-inspired effectively-phased missing-position scenario and assert Java diplotype/haplotype names.
+- [x] Java `NamedAlleleMatcherTest.testDpydUnphasedHomozygousNoFunction`: port the unphased no-function fallback scenario and assert Java haplotype-match labels.
+- [x] Java `NamedAlleleMatcherTest.testPermutationGeneration`: port the CYP2C19 all-phased/all-unphased/mixed-phased `*2/*17` generated fixture.
+- [x] Java `NamedAlleleMatcherTest.testPartialMissingAllele_combination1`: port the CYP2B6 missing-allele combination scenario and assert Java `*2/g.40991369?`.
+- [x] Java `NamedAlleleMatcherTest.testPartialMissingAllele_combination_phased`: port the CYP2B6 phased missing-allele combination scenario and assert Java `*2/g.40991369?`.
+- [x] Java `NamedAlleleMatcherTest.unphasedPrioritySameScore`: port the NAT2 same-score unphased-priority fixture and assert Java default-exemption pick/warning behavior.
+- [x] Java `NamedAlleleMatcherTest.unphasedPriorityDifferentScore`: port the NAT2 different-score unphased-priority fixture and assert Java default-exemption pick/warning behavior.
+- [x] Java `NamedAlleleMatcherTest.requiredPosition`: port the NAT2 required-position fixture and assert Java default-exemption no-call/warning behavior.
+- [x] Java `NamedAlleleMatcherTest.testNat2Combination`: port the NAT2 phased-combination fixture and assert Java `*1/[*15 + *44]`, `*1/[*36 + *46]` behavior.
+- [x] Java `NamedAlleleMatcherTest.testWobbleScoringWithMultipleSequenceMatches`: port the CYP2B6 wobble-scoring fixture and assert Java `*6/*18`, `*9/*18` behavior.
+- [x] Java `PipelineTest` inventory: expand `docs/test-status.md` with an 81-method conservative method map.
+- [x] Java `PipelineTest.testNoData`: port the no-input/header-only VCF pipeline fixture and assert no-data reporter outputs.
+- [x] Java `PipelineTest.testUndocumentedVariation`: port the CYP2C19 undocumented-variation pipeline fixture and assert no-call reporter outputs.
+- [x] Java `PipelineTest.testUndocumentedVariationExtendedReport`: port the extended CYP2C19 undocumented-variation pipeline fixture and assert extended no-call reporter output.
+- [x] Java `PipelineTest.testUndocumentedVariationsWithTreatAsReference`: port the mixed CYP2C19/TPMT/RYR1 undocumented-as-reference pipeline fixture and assert no-call/called reporter outputs.
+- [x] Java `PipelineTest.testUndocumentedVariationsWithTreatAsReferenceAndCombo`: port the combo-mode TPMT/RYR1 undocumented-variation pipeline fixture and assert custom SNP/treat-as-reference reporter outputs.
+- [x] Java `PipelineTest.testUncallable`: port the ABCG2/CYP2C19/TPMT uncallable pipeline fixture and assert no-call reporter outputs.
+- [x] Java `PipelineTest.testCyp2c19`: wire outside-call TSV inputs into the full Rust VCF pipeline and assert CYP2C19 `*1/*1`, outside CYP2D6/G6PD calls, and amitriptyline/citalopram matched annotation counts.
+- [x] Java `PipelineTest.testCyp2c19_s1s2rs58973490het`: load reporter `messages.json` in the full Rust VCF pipeline and assert CYP2C19 `*1/*2`, heterozygous `rs58973490`, outside CYP2D6, matched annotation counts, and the CYP2C19 ambiguity message.
+- [x] Java `PipelineTest.testCyp2c19_s1s2`: port the homozygous/reference `rs58973490` ambiguity-message suppression fixture and assert unchanged annotation matching plus zero matching gene/drug ambiguity messages.
+- [x] Java `PipelineTest.testClomipramineCall`: port the CYP2C19 `*2/*2` recommendation fixture and assert Java matched-annotation counts/source presence for the broad drug set.
+- [x] Java `PipelineTest.testCyp2c19noCall`: port the CYP2C19 no-call recommendation fixture and assert `NoCall`, outside CYP2D6/G6PD calls, and suppressed CPIC/DPWG matches for citalopram and ivacaftor.
+- [x] Java `PipelineTest.testCyp2c19s4bs17rs28399504missing`: port the CYP2C19 missing-position recommendation fixture and assert `*4/*4`, `*4/*17`, `*17/*17`, missing `rs28399504`, and citalopram CPIC/DPWG/FDA matched annotation counts.
+- [x] Java `PipelineTest.testCyp2c19s1s4het`: port the CYP2C19 `*4/*17` plus CYP2D6 outside-call fixture and assert reportable `*1/*4` outside-call output.
+- [x] Java `PipelineTest.testCyp2c19s1s4missingS1`: port the CYP2C19 partial-missing `*1/*4` and `*4/*38` plus CYP2D6 outside-call fixture and assert missing variants plus gene/drug ambiguity messages.
+- [x] Java `PipelineTest.testCyp2c19SingleGeneMatch`: port the CYP2C19 single-gene `*1/*38` plus CYP2D6 outside-call fixture and assert the missing-position report surface.
+- [x] Java `PipelineTest.multipleCalls`: port the CYP2C19 partial `*1/*4` and `*1/*17` multiple-call fixture and assert the missing-position report surface.
+- [x] Java `PipelineTest.testRosuvastatin`: port the ABCG2 + SLCO1B1 rosuvastatin fixture and assert DPYD no-data HTML/report behavior.
+- [x] Java `PipelineTest.testSlco1b1HomWild`: port the SLCO1B1 `*1/*1` simvastatin fixture and assert DPWG `No recommendation` behavior.
+- [x] Java `PipelineTest.testSlco1b1HomVar`: port the SLCO1B1 `*5/*15` simvastatin fixture and assert CPIC/DPWG matched annotation counts.
+- [x] Java `PipelineTest.testSlco1b1Test2`: port the SLCO1B1 `*1/*44` simvastatin fixture and assert CPIC/DPWG matched annotation counts.
+- [x] Java `PipelineTest.testSlco1b1Test3`: port the SLCO1B1 `*1/*15` simvastatin fixture and assert CPIC/DPWG matched annotation counts.
+- [x] Java `PipelineTest.testSlco1b1Test4`: port the SLCO1B1 `*5/*45` simvastatin fixture and assert CPIC/DPWG/FDA source behavior plus intermediate-file outputs.
+- [x] Java `PipelineTest.testSlco1b1Test5`: port the SLCO1B1 `*1/*45` simvastatin fixture and assert the `SLCO1B1 *1/*45 warning` gene message plus intermediate-file outputs.
+- [x] Java `PipelineTest.testSlco1b1UncalledOverride`: port the SLCO1B1 uncalled `rs4149056` override fixture and assert inferred recommendation fallback.
+- [x] Java `PipelineTest.testUgt1a1Phased`: port the UGT1A1 phased `*1/*80` fixture and assert phased matcher/report recommendations.
+- [x] Java `PipelineTest.testUgt1a1Unphased`: port the UGT1A1 unphased `*1/*80` fixture and assert unphased matcher/report recommendations.
+- [x] Java `PipelineTest.testUgt1a1s1s1`: port the UGT1A1 reference `*1/*1` fixture and assert reference matcher/report recommendations.
+- [ ] Next slice: port Java `PipelineTest.testUgt1a1S1S80S28`, covering UGT1A1 `*1/*80+*28` combination recommendations; promote the first Java-vs-Rust reporter/intermediate comparison once the Java reference gate is available.
+
+## 9b. Dependency Blockers
+
+- [ ] `noodles` VCF/BGZF blockers:
+  - owner repo/path;
+  - exact PharmCAT fixture or command proving the gap;
+  - smallest missing parser/writer/index behavior;
+  - whether the fix belongs in `repos/noodles` or the PharmCAT adapter;
+  - next unblock action.
+- [ ] `pgkb-common` behavior blockers:
+  - Java class/method;
+  - PharmCAT caller;
+  - whether the behavior is parity-sensitive or can be replaced by a standard Rust crate;
+  - test proving the chosen replacement.
+- [ ] PharmCAT Java-reference blockers:
+  - missing fixture/data/tool;
+  - Java command that fails or skips;
+  - whether CI should install the tool or mark the Java test out of scope.
+- [ ] Do not stop on the first dependency blocker if other local PharmCAT slices are still unblocked; record the blocker and keep porting the next independent behavior.
+
+## 10. Java-vs-Rust Parity Harness
 
 - [ ] Define a repeatable command that runs Java PharmCAT for selected fixtures and writes outputs to a temporary baseline directory.
 - [ ] Define the matching Rust command/API path and output directory.
@@ -219,8 +1290,27 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   ```
 
 - [ ] CI parity job should run once it is stable enough to avoid false greens.
+- [ ] Build the Java reference once per parity job and pass its path through `PHARMCAT_JAVA_DIR` or `PHARMCAT_JAR`.
+- [ ] Build the Rust binary/test helper in the same job and run both implementations on identical temp directories.
+- [ ] Print a summary with total, passing, failing, ignored, and expected-failure counts.
+- [ ] Upload failed output directories as CI artifacts when diffs fail.
+- [ ] Add a strict preflight at the top of the parity harness:
+  - Java reference exists;
+  - Rust binary/test helper exists;
+  - required fixtures exist;
+  - required tools are on `PATH`;
+  - output directories are empty or newly created.
+- [ ] Keep parity normalization code small, reviewed, and named by reason. Every normalization rule must have a TODO entry and a fixture proving it is nondeterministic rather than a semantic mismatch.
+- [ ] Store the raw Java and Rust commands used for each parity case in the failure artifact so a failing CI case can be rerun locally.
+- [ ] Start parity with the smallest stable feature path:
+  - sample discovery from VCF;
+  - VCF row parsing;
+  - named allele matching JSON fixture;
+  - full PharmCAT JSON output;
+  - TSV/report output;
+  - CLI end-to-end output.
 
-## 10. Upstream-Style Harness Discipline
+## 11. Upstream-Style Harness Discipline
 
 - [ ] Add scripts for stable local gates:
 
@@ -230,12 +1320,40 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   ./test-parity.sh
   ```
 
+- [ ] Add a `./test-all.sh` wrapper once the individual scripts are reliable; it should run the same required gates as CI and print the same summary counts.
 - [ ] Make scripts fail loudly if required tools are missing. The `samtools-rs` TODO noted a false-green caused by missing `bgzip`; avoid silent skips.
 - [ ] Print exact pass/fail/ignored counts for parity groups.
 - [ ] Keep a promoted parity subset separate from exploratory tests until the full suite is green.
 - [ ] Add artifacts for failed output diffs so CI failures are easy to inspect.
+- [ ] Make local scripts clone or verify `repos/PharmCAT`, `repos/noodles`, and `repos/pgkb-common` before running parity.
+- [ ] Make local scripts print the reference repo commit hashes at the start of each run.
+- [ ] Avoid silent skips for missing Java, Gradle, bgzip/tabix, Python, or other tools; either install/document the dependency or fail the gate.
+- [ ] Keep "promoted" parity cases stable and small enough for normal CI; run exhaustive exploratory parity separately until it is green.
+- [ ] Add script-level support for:
+  - `--promoted` for required stable parity cases;
+  - `--all` for exhaustive parity;
+  - `--bless` only if explicitly approved later for updating golden files.
+- [ ] Keep one source of truth for parity case lists, used by both local scripts and CI.
+- [ ] Before opening or merging a slice, run and record:
+  - `cargo fmt --all --check`;
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+  - `cargo test --workspace --all-features`;
+  - the focused Java/Rust/parity command for the area being changed.
 
-## 11. Byte-For-Byte Parity Gates
+## 11a. PR And Slice Discipline
+
+- [ ] Work in narrow slices with one behavior theme: VCF parsing, definition loading, allele matching, report JSON, report TSV, HTML, CLI, or parity harness.
+- [ ] Do not mix dependency upgrades, broad refactors, and behavior parity changes in the same slice unless the dependency change is the only blocker.
+- [ ] After each slice, update this TODO with:
+  - what Java behavior or fixture was ported;
+  - which Rust tests cover it;
+  - exact validation commands and pass counts;
+  - remaining follow-up work.
+- [ ] If using PRs, prefer the `bcftools-rs` pattern: one focused branch, local Rust gate, CI green, merge, pull main, then start the next slice.
+- [ ] Avoid stacked long-running PRs once parity files and status docs exist because those files become high-conflict.
+- [ ] Keep release/performance polish separate from correctness parity until the promoted parity suite is green.
+
+## 12. Byte-For-Byte Parity Gates
 
 - [ ] Full Java test suite passes from a clean checkout.
 - [ ] Full Rust test suite passes from a clean checkout.
@@ -245,8 +1363,12 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
 - [ ] Warnings and recoverable errors match where user-visible compatibility matters.
 - [ ] Exit codes match where CLI compatibility is in scope.
 - [ ] Any non-identical behavior is documented with rationale and tests.
+- [ ] Normalize only documented nondeterminism; never normalize semantic differences to make a test pass.
+- [ ] For JSON output, verify field ordering, null omission, number formatting, and array ordering against Java.
+- [ ] For text outputs, verify line endings, trailing whitespace, headers, warning text, and sort order.
+- [ ] For compressed outputs, compare decompressed payloads first; add byte-level compressed parity only if Java's compressor settings are intentionally in scope.
 
-## 12. Dependency Blocker Log
+## 13. Dependency Blocker Log
 
 - [ ] Keep dependency-blocked work in this TODO instead of patching dependencies opportunistically.
 - [ ] If `noodles` lacks needed VCF behavior, record:
@@ -257,8 +1379,20 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
   - temporary local adapter, if any.
 - [ ] If `pgkb-common` behavior is unclear, add a focused Java probe or fixture before porting.
 - [ ] Do not bypass `noodles` with hand parsing unless the adapter is explicitly documented as PharmCAT-specific behavior.
+- [ ] Track each blocker with:
+  - dependency/repo;
+  - Java fixture or test that exposes it;
+  - current Rust behavior;
+  - intended owner (`pharmcat-rs` adapter, `noodles`, or another repo);
+  - temporary workaround, if any;
+  - removal condition.
+- [ ] Prefer fixing reusable format behavior in `noodles`; keep PharmCAT-specific compatibility behavior in this crate.
+- [ ] Do not let dependency work interrupt a PharmCAT slice unless it is the only thing blocking that slice.
+- [ ] For each dependency blocker, add a focused test in the owning repository once the fix is moved there.
+- [ ] Keep CI patches pointed at local `repos/` checkouts while blocker branches are under active development, then pin or remove the patch once the upstream branch is merged.
+- [ ] When a dependency blocker affects user-visible PharmCAT output, keep a PharmCAT-level regression test even after the dependency fix lands.
 
-## 13. Documentation And Release Readiness
+## 14. Documentation And Release Readiness
 
 - [ ] Document supported Rust API surface.
 - [ ] Document CLI compatibility status.
@@ -266,3 +1400,5 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
 - [ ] Add benchmark fixtures comparing Java and Rust runtime.
 - [ ] Add regression fixtures for every parity bug found during porting.
 - [ ] Decide when the Java submodules become test-only reference material rather than active implementation references.
+- [ ] Add README badges once CI has stable Java, Rust, and parity gates.
+- [ ] Add crate-level rustdoc before publishing or exposing the library downstream.

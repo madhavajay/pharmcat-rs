@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##contig=<ID=chrY,assembly=GRCh38.p13,species="Homo sapiens">
+##contig=<ID=chrM,assembly=GRCh38.p13,species="Homo sapiens">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	Sample_1
+chrY	1	.	A	G	.	PASS	.	GT	0/1
+chrY	2	.	A	G	.	PASS	.	GT	1/0
+chrY	3	.	A	G	.	PASS	.	GT	.|1
+chrM	4	.	C	T	.	PASS	.	GT	0/0
