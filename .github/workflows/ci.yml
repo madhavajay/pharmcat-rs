@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main, madhava/first]
   pull_request:
+    branches: [main, madhava/first]
   workflow_dispatch:
 
 env:

@@ -237,6 +237,7 @@ Goal: port the Java PharmCAT library in `repos/PharmCAT/` to Rust, preserving be
 ## 1. CI And Test Gates
 
 - [x] Add `.github/workflows/ci.yml` with independent jobs for source repo checkout, Java tests, and Rust tests.
+- [x] CI trigger policy (2026-06-04): run on `pull_request` targeting `main`/`madhava/first` plus manual `workflow_dispatch` only. The `push` trigger was removed so a feature branch is not tested twice (push + PR); CI runs once per change, on the PR to trunk.
 - [x] Add `workflow_dispatch` so the Java/Rust reference gates can be run manually.
 - [x] Make CI clone reference repos into `repos/`:
   - `https://github.com/madhavajay/PharmCAT.git`, branch `development`.
