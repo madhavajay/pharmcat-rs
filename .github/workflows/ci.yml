@@ -10,29 +10,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  source-repos:
-    name: Source repos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Clone reference repositories
-        run: |
-          git config --global url."https://github.com/".insteadOf git@github.com:
-          rm -rf repos
-          mkdir -p repos
-          git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
-          git clone --branch madhava/bioscript https://github.com/madhavajay/noodles.git repos/noodles
-          git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
-
-      - name: Show checked out commits
-        run: |
-          git -C repos/PharmCAT rev-parse --short HEAD
-          git -C repos/noodles rev-parse --short HEAD
-          git -C repos/pgkb-common rev-parse --short HEAD
-
   java-reference-tests:
     name: Java reference tests
     runs-on: ubuntu-latest
@@ -48,6 +25,8 @@ jobs:
           mkdir -p repos
           git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
           git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
+          echo "PharmCAT $(git -C repos/PharmCAT rev-parse --short HEAD)"
+          echo "pgkb-common $(git -C repos/pgkb-common rev-parse --short HEAD)"
 
       - uses: actions/setup-java@v4
         with:
@@ -84,6 +63,9 @@ jobs:
           git clone --branch development https://github.com/madhavajay/PharmCAT.git repos/PharmCAT
           git clone --branch madhava/bioscript https://github.com/madhavajay/noodles.git repos/noodles
           git clone https://github.com/madhavajay/pgkb-common.git repos/pgkb-common
+          echo "PharmCAT $(git -C repos/PharmCAT rev-parse --short HEAD)"
+          echo "noodles $(git -C repos/noodles rev-parse --short HEAD)"
+          echo "pgkb-common $(git -C repos/pgkb-common rev-parse --short HEAD)"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
