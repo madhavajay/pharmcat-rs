@@ -22,7 +22,7 @@ use crate::{
         parse_outside_calls_file,
     },
     report::{
-        CallsOnlyTsvOptions, GuidanceLoadError, HtmlReportOptions, MessageCatalog,
+        CallsOnlyTsvOptions, DataSource, GuidanceLoadError, HtmlReportOptions, MessageCatalog,
         PgkbGuidelineCollection, ReportContext, ReportContextFromMatcherError, ReportGene,
         ReportGeneFromOutsideCallError, ReportGeneFromStandardCallError, write_calls_only_tsv,
         write_report_html, write_report_json,
@@ -494,6 +494,23 @@ pub fn run_reporter_from_vcf(
                 ReportGene::from_outside_call(&call, phenotypes.phenotype(&call.gene))?;
             report_genes.push(report_gene);
         }
+    }
+
+    // Java Phenotyper seeds an unspecified ("No Result") gene report for every CPIC/DPWG
+    // drug-related gene with no matcher or outside data (Phenotyper.listUnspecifiedGenes ->
+    // GeneReport.unspecifiedGeneReport), so a multi-gene recommendation lookup can key an absent
+    // gene as "No Result" (e.g. carbamazepine CPIC on HLA-A + HLA-B when only HLA-B is present).
+    let present_genes: BTreeSet<String> =
+        report_genes.iter().map(|gene| gene.gene.clone()).collect();
+    let mut unspecified_genes = guidance.genes_used_in_source(DataSource::Cpic);
+    unspecified_genes.append(&mut guidance.genes_used_in_source(DataSource::Dpwg));
+    for gene in unspecified_genes {
+        if present_genes.contains(&gene) {
+            continue;
+        }
+        let report_gene = ReportGene::unknown(&gene, phenotypes.phenotype(&gene))
+            .map_err(ReportGeneFromStandardCallError::Phenotype)?;
+        report_genes.push(report_gene);
     }
 
     let mut context = ReportContext::from_gene_reports(
@@ -1974,6 +1991,26 @@ mod tests {
     const IFNL3_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/IFNL3_translation.json";
     const VKORC1_DEFINITION_PATH: &str = "../../repos/PharmCAT/src/main/resources/org/pharmgkb/pharmcat/definition/alleles/VKORC1_translation.json";
 
+    // The phenotype directory, prescribing guidance, and message catalog are large JSON resources.
+    // Parsing them from disk in every test dominates pipeline-test wall time, so load each once and
+    // hand out cheap in-memory clones.
+    fn shared_phenotypes() -> &'static PhenotypeMap {
+        static CACHE: std::sync::OnceLock<PhenotypeMap> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes"))
+    }
+
+    fn shared_guidance() -> &'static PgkbGuidelineCollection {
+        static CACHE: std::sync::OnceLock<PgkbGuidelineCollection> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| {
+            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance")
+        })
+    }
+
+    fn shared_messages() -> &'static MessageCatalog {
+        static CACHE: std::sync::OnceLock<MessageCatalog> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages"))
+    }
+
     #[test]
     fn unix_millis_to_iso8601_matches_java_instant_shape() {
         assert_eq!(unix_millis_to_iso8601(0), "1970-01-01T00:00:00Z");
@@ -2781,9 +2818,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
         let output_dir = unique_temp_path("pharmcat-run-reporter-from-vcf");
         let outputs = PipelineOutputPlan {
             base_dir: output_dir.clone(),
@@ -2852,9 +2888,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
         let vcf_file = write_temp_named_file(
             "pipeline-no-data.vcf",
             "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n",
@@ -3025,9 +3060,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -3187,9 +3221,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -3331,9 +3364,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &abcg2_definition, &[], &[]);
@@ -3443,9 +3475,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[("rs3758581", "G", "1/1")], &[]);
@@ -3551,10 +3582,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -3697,10 +3727,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -3836,10 +3865,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -4044,10 +4072,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -4136,9 +4163,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_omitting(
@@ -4240,9 +4266,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -4330,10 +4355,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_omitting(
@@ -4463,9 +4487,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_omitting(
@@ -4564,9 +4587,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_omitting(
@@ -4662,9 +4684,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -4762,9 +4783,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
@@ -4865,9 +4885,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -4972,9 +4991,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -5085,9 +5103,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -5192,9 +5209,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -5342,10 +5358,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -5506,9 +5521,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -5633,9 +5647,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_with_default_genotype(
@@ -5749,9 +5762,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[("rs887829", "T", "0/1")], &[]);
@@ -5859,9 +5871,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
@@ -5967,9 +5978,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -6079,9 +6089,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -6176,10 +6185,9 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
-        let messages = MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
+        let messages = shared_messages().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_with_default_genotype(
@@ -6278,9 +6286,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Java phases allele1/allele2 left/right: hap1 = *80+*28 (T, CATAT), hap2 = *6 (rs4148323 A).
@@ -6352,9 +6359,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[("rs4148323", "A", "1/1")], &[]);
@@ -6422,9 +6428,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Phased with rs3064744 missing: hap1 = *6 (rs4148323 A), hap2 = *80 (rs887829 T) but the
@@ -6505,9 +6510,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -6622,9 +6626,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Homozygous *80 (rs887829 T/T) with a heterozygous repeat (CAT/CATAT) splits the haplotypes
@@ -6691,9 +6694,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Homozygous *28 (rs3064744 CATAT/CATAT) with rs887829 missing leaves *80 status unknown, so
@@ -6771,9 +6773,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[("rs3064744", "CATAT", "0/1")], &[]);
@@ -6833,9 +6834,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // *27 (rs35350960 A) over a het *28 repeat, with rs887829 missing so *80 status is unknown.
@@ -6912,9 +6912,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Phased hap1 carries *80 (T) + *28 (CATAT) + *27 (A) together, which no single named allele
@@ -6975,9 +6974,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Phased hap1 carries *80 (T) + *27 (A) with the *28 repeat missing; no single named allele
@@ -7041,11 +7039,10 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
         let message_catalog = if with_messages {
-            Some(MessageCatalog::from_path(Path::new(MESSAGE_PATH)).expect("messages"))
+            Some(shared_messages().clone())
         } else {
             None
         };
@@ -7221,9 +7218,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
@@ -7327,9 +7323,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, cyp2c9_overrides, &[]);
@@ -7414,6 +7409,14 @@ mod tests {
             1,
         );
 
+        // carbamazepine-CPIC is a two-gene (HLA-A + HLA-B) lookup; with HLA-A seeded as a "No Result"
+        // unspecified gene report, HLA-B *15:02 positive still matches the three CPIC populations.
+        assert_matched_from_source(
+            &run.context,
+            "carbamazepine",
+            PrescribingGuidanceSource::CpicGuideline,
+            3,
+        );
         // carbamazepine-DPWG (HLA-B single-gene lookup) matches on *15:02 positive.
         assert_matched_from_source(
             &run.context,
@@ -7421,13 +7424,6 @@ mod tests {
             PrescribingGuidanceSource::DpwgGuideline,
             1,
         );
-        // NOTE: Java also asserts carbamazepine CPIC == 3 here. That CPIC guideline is a two-gene
-        // (HLA-A + HLA-B) lookup whose recommendations key HLA-A as "No Result" when HLA-A has no
-        // data. Java's Phenotyper seeds an unspecified ("No Result") GeneReport for every
-        // guideline-referenced gene with no input (Phenotyper.listUnspecifiedGenes /
-        // GeneReport.unspecifiedGeneReport), so the genotype combination includes HLA-A="No Result".
-        // The Rust ReportContext does not yet seed those unspecified gene reports, so the two-gene
-        // lookup with a fully-absent gene returns 0. Tracked as the next slice in TODO.md.
     }
 
     #[test]
@@ -7520,9 +7516,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, overrides, missing_rsids);
@@ -7561,9 +7556,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &cyp2c9, &[("rs1057910", "C", "1/1")], &[]);
@@ -7626,9 +7620,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &cyp2c19, &[], &[]);
@@ -7696,9 +7689,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[], &[]);
@@ -7978,9 +7970,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows_with_default_genotype(
@@ -8104,9 +8095,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         // Unphased twin of the missing-phased case: rs3064744 missing leaves *80/*80+*28/*80+*37.
@@ -8185,9 +8175,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(
@@ -8449,9 +8438,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let run = run_reporter_from_vcf(
             &vcf_path,
@@ -8514,9 +8502,8 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
         let options = ReporterPipelineOptions {
             include_combinations: false,
             ..ReporterPipelineOptions::default()
@@ -8589,8 +8576,7 @@ mod tests {
     fn run_reporter_from_vcf_surfaces_vcf_sample_errors() {
         let definitions = DefinitionReader::from_definitions(BTreeMap::new());
         let phenotypes = PhenotypeMap::default();
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let guidance = shared_guidance().clone();
 
         let error = run_reporter_from_vcf(
             Path::new(CYP3A5_VCF_PATH),
@@ -8621,9 +8607,8 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let phenotypes = PhenotypeMap::from_dir(Path::new(PHENOTYPE_PATH)).expect("phenotypes");
-        let guidance =
-            PgkbGuidelineCollection::from_path(Path::new(GUIDANCE_PATH)).expect("guidance");
+        let phenotypes = shared_phenotypes().clone();
+        let guidance = shared_guidance().clone();
 
         let mut vcf = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tPharmCAT\n".to_owned();
         append_definition_vcf_rows(&mut vcf, &definition, &[("rs3758581", "G,T", "0/2")], &[]);
