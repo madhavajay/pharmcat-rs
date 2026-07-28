@@ -3,8 +3,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -196,8 +195,8 @@ impl PgkbGuidelineCollection {
 
     /// Loads prescribing guidance JSON from `path`.
     pub fn from_path(path: &Path) -> Result<Self, GuidanceLoadError> {
-        let file = File::open(path)?;
-        let dataset: PrescribingGuidanceDataset = serde_json::from_reader(file)?;
+        let data = fs::read(path)?;
+        let dataset: PrescribingGuidanceDataset = serde_json::from_slice(&data)?;
 
         let mut guideline_map = BTreeMap::<String, BTreeSet<usize>>::new();
         for (index, package) in dataset.guideline_packages.iter().enumerate() {
@@ -4052,8 +4051,8 @@ impl MessageCatalog {
 
     /// Loads Java reporter `messages.json`.
     pub fn from_path(path: &Path) -> Result<Self, GuidanceLoadError> {
-        let file = File::open(path)?;
-        let messages = serde_json::from_reader::<_, Vec<MessageAnnotation>>(file)?;
+        let data = fs::read(path)?;
+        let messages = serde_json::from_slice::<Vec<MessageAnnotation>>(&data)?;
         Ok(Self::from_messages(messages))
     }
 

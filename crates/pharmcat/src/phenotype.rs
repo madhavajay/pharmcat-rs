@@ -2,8 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io,
+    fs, io,
     path::Path,
 };
 
@@ -1428,8 +1427,10 @@ fn unique_lookup(
 
 /// Reads one phenotype JSON file.
 pub fn read_gene_phenotype_file(path: &Path) -> Result<GenePhenotype, PhenotypeLoadError> {
-    let file = File::open(path)?;
-    Ok(serde_json::from_reader(file)?)
+    // Phenotype resources are up to 20 MB. Avoid `from_reader` on an unbuffered `File`, whose
+    // byte-at-a-time adapter otherwise turns resource initialization into millions of syscalls.
+    let data = fs::read(path)?;
+    Ok(serde_json::from_slice(&data)?)
 }
 
 /// Phenotype loading error.

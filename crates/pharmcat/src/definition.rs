@@ -3,8 +3,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io,
+    fs, io,
     path::Path,
 };
 
@@ -624,9 +623,11 @@ impl DefinitionReader {
 
 /// Reads one definition file.
 pub fn read_definition_file(path: &Path) -> Result<DefinitionFile, DefinitionLoadError> {
-    let file = File::open(path)?;
+    // `serde_json::from_reader` iterates `Read::bytes`; using it with a bare `File` makes large
+    // PharmCAT resources syscall-bound. Read in bulk and let the slice reader parse in memory.
+    let data = fs::read(path)?;
     let mut definition: DefinitionFile =
-        serde_json::from_reader(file).map_err(DefinitionLoadError::Parse)?;
+        serde_json::from_slice(&data).map_err(DefinitionLoadError::Parse)?;
     definition.initialize_derived_fields();
     Ok(definition)
 }
@@ -635,8 +636,8 @@ pub fn read_definition_file(path: &Path) -> Result<DefinitionFile, DefinitionLoa
 pub fn read_exemptions_file(
     path: &Path,
 ) -> Result<BTreeMap<String, DefinitionExemption>, DefinitionLoadError> {
-    let file = File::open(path)?;
-    serde_json::from_reader(file).map_err(DefinitionLoadError::Parse)
+    let data = fs::read(path)?;
+    serde_json::from_slice(&data).map_err(DefinitionLoadError::Parse)
 }
 
 /// Definition loading error.
