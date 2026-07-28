@@ -615,19 +615,29 @@ fn write_cli_intermediate_outputs(
     vcf_path: &Path,
     config: &PharmcatCliConfig,
 ) -> Result<(), CliPipelineError> {
-    if let Some(path) = &outputs.matcher_json {
+    if !config.delete_intermediate_files
+        && let Some(path) = &outputs.matcher_json
+    {
         let json = matcher_results_json(run, outputs, definitions, vcf_path, config)?;
         fs::write(path, serde_json::to_string_pretty(&json)?).map_err(ReporterPipelineError::Io)?;
     }
-    if let Some(path) = &outputs.matcher_warnings {
+    // Java preserves this diagnostic even with -del when warnings exist. The Rust CLI has
+    // historically also emitted an empty diagnostic on normal runs, so retain that behavior.
+    if (!config.delete_intermediate_files || !run.vcf_warnings.is_empty())
+        && let Some(path) = &outputs.matcher_warnings
+    {
         fs::write(path, matcher_warnings_text(&run.vcf_warnings))
             .map_err(ReporterPipelineError::Io)?;
     }
-    if let Some(path) = &outputs.matcher_html {
+    if !config.delete_intermediate_files
+        && let Some(path) = &outputs.matcher_html
+    {
         fs::write(path, matcher_html_string(run, definitions, vcf_path))
             .map_err(ReporterPipelineError::Io)?;
     }
-    if let Some(path) = &outputs.phenotyper_json {
+    if !config.delete_intermediate_files
+        && let Some(path) = &outputs.phenotyper_json
+    {
         write_report_json(&run.context, path)?;
     }
     Ok(())
@@ -8387,6 +8397,50 @@ mod tests {
         let phenotype_json = fs::read_to_string(output_dir.join("cli-cyp3a5.phenotype.json"))
             .expect("phenotype JSON");
         assert!(phenotype_json.contains("\"geneSymbol\": \"CYP3A5\""));
+
+        let delete_output_dir = unique_temp_path("pharmcat-cli-delete-output");
+        let mut delete_config = (*config).clone();
+        delete_config.output_dir = Some(delete_output_dir.clone());
+        delete_config.base_filename = Some("cli-cyp3a5-delete".to_owned());
+        delete_config.delete_intermediate_files = true;
+
+        run_cli_config(&delete_config, &options).expect("CLI pipeline with -del");
+
+        assert!(
+            !delete_output_dir
+                .join("cli-cyp3a5-delete.match.json")
+                .exists()
+        );
+        assert!(
+            !delete_output_dir
+                .join("cli-cyp3a5-delete.match.html")
+                .exists()
+        );
+        assert!(
+            !delete_output_dir
+                .join("cli-cyp3a5-delete.match_warnings.txt")
+                .exists()
+        );
+        assert!(
+            !delete_output_dir
+                .join("cli-cyp3a5-delete.phenotype.json")
+                .exists()
+        );
+        assert!(
+            delete_output_dir
+                .join("cli-cyp3a5-delete.report.html")
+                .is_file()
+        );
+        assert!(
+            delete_output_dir
+                .join("cli-cyp3a5-delete.report.json")
+                .is_file()
+        );
+        assert!(
+            delete_output_dir
+                .join("cli-cyp3a5-delete.report.tsv")
+                .is_file()
+        );
     }
 
     #[test]
